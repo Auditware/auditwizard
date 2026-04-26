@@ -33,7 +33,7 @@ Our goal is to use deep expertise in Ethereum security tooling and AI to shape t
 > We are working in public and releasing this at a very early stage. please check back for our progress, see high level items below
 
 - [x] secure skills loading to run guardrails and safety check on AI skills
-- [ ] baked-in recommended AI auditing skills
+- [x] baked-in recommended AI auditing skills
 - [x] agent messaging system for cross-execution
 - [x] claude models support (bring your own API key)
 - [ ] hot-reloaded TUI environment to code audit-wizard as you go
@@ -87,6 +87,21 @@ Build a standalone binary
 bun run build
 ./dist/audit-wizard
 ```
+
+## Built-in Skills
+
+AuditWizard ships with a curated set of security-focused skills. Load any of them with the `/skills` command or the `a` keybinding.
+
+| Skill | Description |
+|---|---|
+| `smart-contract-audit` | Comprehensive multi-expert audit framework for Solidity/Vyper, Anchor Rust, TON, and Move |
+| `solidity-auditor` | Live security review of Solidity contracts as you develop |
+| `x-ray` | Pre-audit readiness report: threat model, invariants, integrations, test coverage, git history |
+| `audit-prep` | Structured protocol onboarding and audit preparation checklist |
+| `audit-extractor` | Extract findings from PDF audit reports into a markdown checklist |
+| `auditor-quiz` | Interactive knowledge quiz to test auditor understanding of a codebase |
+| `blockchain-forensics` | On-chain forensics and transaction tracing for incident response |
+| `dimensional-analysis` | Annotate arithmetic with units/dimensions to catch formula and scaling bugs |
 
 ## Requirements
 
