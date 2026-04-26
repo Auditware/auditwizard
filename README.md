@@ -92,16 +92,16 @@ bun run build
 
 AuditWizard ships with a curated set of security-focused skills. Load any of them with the `/skills` command or the `a` keybinding.
 
-| Skill | Description |
-|---|---|
-| `smart-contract-audit` | Comprehensive multi-expert audit framework for Solidity/Vyper, Anchor Rust, TON, and Move |
-| `solidity-auditor` | Live security review of Solidity contracts as you develop |
-| `x-ray` | Pre-audit readiness report: threat model, invariants, integrations, test coverage, git history |
-| `audit-prep` | Structured protocol onboarding and audit preparation checklist |
-| `audit-extractor` | Extract findings from PDF audit reports into a markdown checklist |
-| `auditor-quiz` | Interactive knowledge quiz to test auditor understanding of a codebase |
-| `blockchain-forensics` | On-chain forensics and transaction tracing for incident response |
-| `dimensional-analysis` | Annotate arithmetic with units/dimensions to catch formula and scaling bugs |
+| Skill | Description | Author |
+|---|---|---|
+| `smart-contract-audit` | Comprehensive multi-expert audit framework for Solidity/Vyper, Anchor Rust, TON, and Move | [@forefy](https://github.com/forefy) |
+| `solidity-auditor` | Live security review of Solidity contracts as you develop | [@pashov](https://github.com/pashov) |
+| `x-ray` | Pre-audit readiness report: threat model, invariants, integrations, test coverage, git history | [@pashov](https://github.com/pashov) |
+| `audit-prep` | Structured protocol onboarding and audit preparation checklist | [@PlamenTSV](https://github.com/PlamenTSV) |
+| `audit-extractor` | Extract findings from PDF audit reports into a markdown checklist | [@Layr-Labs](https://github.com/Layr-Labs) |
+| `auditor-quiz` | Interactive knowledge quiz to test auditor understanding of a codebase | [@forefy](https://github.com/forefy) |
+| `blockchain-forensics` | On-chain forensics and transaction tracing for incident response | [@forefy](https://github.com/forefy) |
+| `dimensional-analysis` | Annotate arithmetic with units/dimensions to catch formula and scaling bugs | [@trailofbits](https://github.com/trailofbits) |
 
 ## Requirements
 
