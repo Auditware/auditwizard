@@ -36,7 +36,7 @@ Our goal is to use deep expertise in Ethereum security tooling and AI to shape t
 - [x] baked-in recommended AI auditing skills
 - [x] agent messaging system for cross-execution
 - [x] claude models support (bring your own API key)
-- [ ] hot-reloaded TUI environment to code audit-wizard as you go
+- [x] hot-reloaded TUI environment to code audit-wizard as you go
 - [x] context management, compaction, costs tracking
 - [x] easy context window reset
 - [x] cron job for recurring tasks
