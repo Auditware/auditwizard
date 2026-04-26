@@ -10,5 +10,15 @@
     "rna",
     "mem"
   ],
-  "systemPrompt": "You are audit-wizard, a smart contract and web3 security auditing AI agent."
+  "systemPrompt": "You are audit-wizard, a smart contract and web3 security auditing AI agent.",
+  "defaultSkills": [
+    "pashov/skills/x-ray@95825b02f4f4fef33cd27918e1f56bf4a448de28",
+    "PlamenTSV/plamen/skills/audit-prep@e7e7d8e41da132ebb637281382edcd0f22d0fae1",
+    "pashov/skills/solidity-auditor@95825b02f4f4fef33cd27918e1f56bf4a448de28",
+    "trailofbits/skills/plugins/dimensional-analysis/skills/dimensional-analysis@d7f76b532d1e4c6e7757e04d25c99ab60dd5e32c",
+    "Layr-Labs/eigenlayer-contracts/.claude/skills/audit-extractor@d302f65042164c8d8d0a983c1540d85a8710030b",
+    "forefy/.context/skills/auditor-quiz@d8bd492cf21bc704459a81f7fee3cfa0a64eca01",
+    "forefy/.context/skills/smart-contract-audit@d9d55805f600608d20b383ca53ef9a3a09075152",
+    "forefy/.context/skills/blockchain-forensics@f30adccd7fa1fba5928702ff602598a23d58363f"
+  ]
 }

@@ -12,6 +12,7 @@ export function useMouse(
 ): void {
   const pressRowRef = useRef<number | null>(null)
   const pressColRef = useRef<number | null>(null)
+  const didDragRef = useRef(false)
 
   useEffect(() => {
     const stdin = process.stdin
@@ -29,26 +30,36 @@ export function useMouse(
         if (ev.type === 'press') {
           pressRowRef.current = ev.row
           pressColRef.current = ev.col
-          setSelection({ startRow: ev.row, startCol: ev.col, endRow: ev.row, endCol: ev.col })
-          onPress?.(ev.row, ev.col)
+          didDragRef.current = false
+          // Don't start selection on press alone - wait to see if drag follows
         } else if (ev.type === 'drag' && pressRowRef.current !== null) {
+          didDragRef.current = true
           setSelection({
             startRow: pressRowRef.current, startCol: pressColRef.current!,
             endRow: ev.row, endCol: ev.col,
           })
         } else if (ev.type === 'release' && pressRowRef.current !== null) {
           const sRow = pressRowRef.current, sCol = pressColRef.current!
+          const wasDrag = didDragRef.current
           pressRowRef.current = null
           pressColRef.current = null
+          didDragRef.current = false
           setSelection(null)
-          const text = screenBuffer.getSelectedText(sRow, sCol, ev.row, ev.col)
-          if (text.trim().length >= 2) {
-            const proc = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] })
-            proc.stdin.write(text)
-            proc.stdin.end()
-            proc.on('close', () => onCopied(text.length))
+
+          if (!wasDrag) {
+            // Single click - focus input, no copy
+            onPress?.(sRow, sCol)
           } else {
-            onCopied(0)
+            // Drag-release - copy selected text
+            const text = screenBuffer.getSelectedText(sRow, sCol, ev.row, ev.col)
+            if (text.trim().length >= 2) {
+              const proc = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] })
+              proc.stdin.write(text)
+              proc.stdin.end()
+              proc.on('close', () => onCopied(text.length))
+            } else {
+              onCopied(0)
+            }
           }
         }
       }
@@ -56,5 +67,5 @@ export function useMouse(
 
     stdin.on('data', handler)
     return () => { stdin.off('data', handler) }
-  }, [onWheel, onCopied])
+  }, [onWheel, onCopied, onPress])
 }

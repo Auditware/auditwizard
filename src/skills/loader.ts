@@ -4,15 +4,21 @@
 // https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
 
 import { existsSync, readdirSync, statSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { hashContent } from './scanner.js'
 import { agentsDir } from '../config/agentsDir.js'
 
+// If running from a strain directory, its local skills/ dir is scanned first (strain-scoped)
+const strainSkillsDir = existsSync(join(process.cwd(), '.strain.json'))
+  ? join(process.cwd(), 'skills')
+  : null
+
 // Skill directories searched in order (later overrides earlier on name collision)
 export const SKILL_DIRS = [
+  strainSkillsDir,
   agentsDir('skills'),
   join(process.env['HOME'] ?? '.', '.claude', 'skills'),
-].filter(Boolean)
+].filter(Boolean) as string[]
 
 export interface SkillMeta {
   name: string
@@ -38,6 +44,11 @@ export interface LoadedSkill {
   // Optional slash command this skill exposes
   slashCommand?: string
   slashDesc?: string
+  // Source metadata (populated from .meta.json if present)
+  source?: 'github' | 'local'
+  commitSha?: string
+  isBuiltIn?: boolean
+  repoUrl?: string
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
@@ -99,8 +110,23 @@ export async function loadSkillFile(skillMdPath: string): Promise<LoadedSkill | 
     const slug = toSlug(name)
     const hash = hashContent(raw)
 
-    return { slug, name, description, content, path: skillMdPath, hash, loadedAt: Date.now(),
+    const skill: LoadedSkill = { slug, name, description, content, path: skillMdPath, hash, loadedAt: Date.now(),
       slashCommand: meta.slashCommand, slashDesc: meta.slashDesc }
+
+    // Load optional source metadata from .meta.json in the same directory
+    const metaPath = join(dirname(skillMdPath), '.meta.json')
+    if (existsSync(metaPath)) {
+      try {
+        const metaRaw = await Bun.file(metaPath).text()
+        const m = JSON.parse(metaRaw) as { source?: string; sha?: string; isBuiltIn?: boolean; repoUrl?: string }
+        if (m.source === 'github' || m.source === 'local') skill.source = m.source
+        if (m.sha) skill.commitSha = m.sha
+        if (typeof m.isBuiltIn === 'boolean') skill.isBuiltIn = m.isBuiltIn
+        if (m.repoUrl) skill.repoUrl = m.repoUrl
+      } catch { /* ignore malformed .meta.json */ }
+    }
+
+    return skill
   } catch (err) {
     console.error(`[skills] Failed to load ${skillMdPath}:`, err)
     return null
@@ -132,5 +158,10 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
       if (skill) bySlug.set(skill.slug, skill)
     }
   }
-  return [...bySlug.values()]
+  return [...bySlug.values()].sort((a, b) => {
+    const aOrder = a.isBuiltIn ? 0 : 1
+    const bOrder = b.isBuiltIn ? 0 : 1
+    if (aOrder !== bOrder) return aOrder - bOrder
+    return a.slug.localeCompare(b.slug)
+  })
 }

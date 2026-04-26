@@ -19,10 +19,11 @@ export type SlashPickerProps<T> = {
   hintText?: string     // omit to hide hint row
   hintColor?: string    // override hint text color (default: theme.subtle)
   // 'overlay' = round border full-width box (sessions, model picker)
-  // 'inline'  = no border, renders list directly
+  // 'inline'  = no border, renders list directly (children panel)
   variant?: 'overlay' | 'inline'
   title?: string        // optional header label (inline variant)
   titleRight?: React.ReactElement // optional right side of title row
+  rowSpacing?: number   // marginBottom between rows (default: 0)
 }
 
 export function SlashPicker<T>({
@@ -39,14 +40,16 @@ export function SlashPicker<T>({
   variant = 'overlay',
   title,
   titleRight,
+  rowSpacing = 0,
 }: SlashPickerProps<T>): React.ReactElement {
   const hasHints = Boolean(hintText)
   const hasTitle = Boolean(title)
 
-  // chrome = border/padding(4 for overlay, 2 for inline) + title(2 if present) + hints(2 if present)
+  // chrome = border/padding(4 for overlay, 2 for inline) + title(2 if present) + hints(2 if present) + scroll indicators(2)
   const baseChromeRows = variant === 'overlay' ? 4 : 2
-  const CHROME_ROWS = baseChromeRows + (hasTitle ? 2 : 0) + (hasHints ? 2 : 0)
-  const maxVisible = Math.max(2, height - CHROME_ROWS)
+  const CHROME_ROWS = baseChromeRows + (hasTitle ? 2 : 0) + (hasHints ? 2 : 0) + 2
+  const rowHeight = 1 + rowSpacing
+  const maxVisible = Math.max(2, Math.floor((height - CHROME_ROWS) / rowHeight))
 
   const { visibleItems, windowStart, windowEnd, scrolledAbove, scrolledBelow, globalIdx } =
     useScrollWindow(items, selected, maxVisible)
@@ -64,9 +67,7 @@ export function SlashPicker<T>({
       )}
 
       {scrolledAbove && (
-        <Box paddingX={1}>
-          <Text color={theme.inactive} dimColor wrap="truncate">↑ {windowStart} more</Text>
-        </Box>
+        <Text color={theme.inactive} dimColor> ^ {windowStart} above</Text>
       )}
 
       {items.length === 0
@@ -79,7 +80,7 @@ export function SlashPicker<T>({
           const gIdx = globalIdx(i)
           const isActive = gIdx === selected
           return (
-            <Box key={getKey(item)} flexDirection="row" gap={2} paddingX={1}>
+            <Box key={getKey(item)} flexDirection="row" gap={2} paddingX={1} marginBottom={rowSpacing}>
               <Text color={isActive ? accentColor : theme.inactive}>{isActive ? '❯' : ' '}</Text>
               {renderRow(item, isActive, innerCols)}
             </Box>
@@ -88,9 +89,7 @@ export function SlashPicker<T>({
       }
 
       {scrolledBelow && (
-        <Box paddingX={1}>
-          <Text color={theme.inactive} dimColor wrap="truncate">↓ {items.length - windowEnd} more</Text>
-        </Box>
+        <Text color={theme.inactive} dimColor> v {items.length - windowEnd} below</Text>
       )}
 
       {hasHints && (

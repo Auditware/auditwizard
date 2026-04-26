@@ -67,6 +67,20 @@ export class QueryEngine {
     return `\n\n## Active Skills\n\n${combined}`
   }
 
+  private buildSystemPromptBase(state: AppState): string {
+    return [
+      state.strainConfig?.systemPrompt
+        ? state.strainConfig.systemPrompt
+        : `You are ${state.instanceName}, an AI agent harness running in a terminal TUI.\nYou help the user with tasks directly in their terminal.`,
+      `Current working directory: ${state.cwd}`,
+      `Session: ${state.sessionName}`,
+      state.strainConfig ? `You are running as a strain. Only modify files within: ${state.cwd}` : null,
+      'When the user pastes a URL, always use the fetch_url tool to retrieve its content before answering.',
+      'Use web_search for questions about current events or information you might not have.',
+      'Use ask_user to pause and ask a clarifying question when the task is ambiguous.',
+    ].filter(Boolean).join('\n')
+  }
+
   getApiKey(): string | undefined { return this.apiKey }
 
   resetCompactCache(): void {
@@ -142,14 +156,7 @@ export class QueryEngine {
   } {
     const est = (s: string) => Math.ceil(s.length / 4)
 
-    const basePrompt = [
-      `You are ${state.instanceName}, an AI agent running in a terminal TUI.`,
-      'You help the user with tasks directly in their terminal.',
-      `Current working directory: ${state.cwd}`,
-      `Session: ${state.sessionName}`,
-    ].join('\n')
-
-    const systemBase = est(basePrompt)
+    const systemBase = est(this.buildSystemPromptBase(state))
     const compactionSummary = this.compactCache ? est(this.compactCache.summary) : 0
     const activeSkills = est(this.buildActiveSkillSection())
 
@@ -215,17 +222,7 @@ export class QueryEngine {
     const abortController = new AbortController()
     this.abortController = abortController
 
-    const systemPromptBase = [
-      state.strainConfig?.systemPrompt
-        ? state.strainConfig.systemPrompt
-        : `You are ${state.instanceName}, an AI agent running in a terminal TUI.\nYou help the user with tasks directly in their terminal.`,
-      `Current working directory: ${state.cwd}`,
-      `Session: ${state.sessionName}`,
-      state.strainConfig ? `You are running as a strain. Only modify files within: ${state.cwd}` : null,
-      'When the user pastes a URL, always use the fetch_url tool to retrieve its content before answering.',
-      'Use web_search for questions about current events or information you might not have.',
-      'Use ask_user to pause and ask a clarifying question when the task is ambiguous.',
-    ].filter(Boolean).join('\n')
+    const systemPromptBase = this.buildSystemPromptBase(state)
 
     // Create the first assistant message placeholder for streaming display
     const firstAssistantMsgId = appendMessage(setState, { role: 'assistant', content: '' })

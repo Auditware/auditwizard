@@ -1,4 +1,4 @@
-# AI Auditing Agent
+# AuditWizard AI Auditing Agent
 
 <p align="center">
   <img src="static/logo.svg" alt="audit-wizard" title="audit-wizard" width="400"/>
@@ -11,14 +11,14 @@
 </p>
 
 <p align="center">
-  <a href="#what-is-audit-wizard">What is audit-wizard</a> |
+  <a href="#what-is-audit-wizard">What is AuditWizard</a> |
   <a href="#how-to-install">Install</a> |
   <a href="#how-to-run">Run</a>
 </p>
 
-## What is audit-wizard
+## What is AuditWizard
 
-Audit Wizard 2.0 is an open-source initiative to solve the gaps of the auditor/agent interface layer during security audits of Ethereum protocols.
+Audit Wizard (2.0) is an open-source initiative to solve the gaps of the auditor/agent interface layer during security audits of Ethereum protocols.
 
 Ethereum security auditors are at a crucial transition point:
 

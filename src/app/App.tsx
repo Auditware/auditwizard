@@ -3,14 +3,12 @@ import { spawnSync } from 'child_process'
 import { Box, Text, useInput, useStdout } from 'ink'
 import { AppStateContext, makeInitialState, addSystemMessage, appendMessage, instanceSuffix, type AppState, isBottomPanelMode } from '../app/AppState.js'
 import { detectConflicts, DEFAULT_BINDINGS } from '../utils/keybindings.js'
-import GengharSprite, { GENGHAR_HEIGHT } from '../components/GengharSprite.js'
 import { theme } from '../app/theme.js'
 import StatusLine from '../components/StatusLine.js'
 import PromptInput from '../components/PromptInput.js'
 import MessageHistory from '../components/MessageHistory.js'
 import CtxPanel from '../components/CtxPanel.js'
 import EveryPanel from '../commands/EveryPanel.js'
-import MessagePanel from '../components/MessagePanel.js'
 import { QueryEngine } from '../agent/QueryEngine.js'
 import { BUILTIN_TOOLS } from '../agent/tools.js'
 import {
@@ -26,6 +24,7 @@ import { HotReloader } from '../reload/HotReloader.js'
 import type { ImageAttachment } from '../utils/imagePaste.js'
 import { loadConfig, saveConfig } from '../config/AgentConfig.js'
 import { agentsDir } from '../config/agentsDir.js'
+import { readStrainConfig } from '../context/strain.js'
 import { useMouse } from '../hooks/useMouse.js'
 import { setOverlayPaused } from '../utils/selectionOverlay.js'
 import { defaultRegistry } from '../commands/index.js'
@@ -34,7 +33,7 @@ import { GenomePanelRegistry } from '../commands/GenomePanelRegistry.js'
 import { SlashPicker } from '../components/SlashPicker.js'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { readUnread, markRead, heartbeat } from '../utils/mailbox.js'
+import { readUnread, markRead, heartbeat, listOnline } from '../utils/mailbox.js'
 import { getDueTasks, advanceIntervalTask } from '../utils/intervalTasks.js'
 import { ALL_GENOMES } from '../genomes/index.js'
 
@@ -81,25 +80,53 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
   const termCols = stdout?.columns ?? 80
   const termRows = stdout?.rows ?? 24
 
+  const isStrain = process.env['AGENT_IS_STRAIN'] === '1'
+    || existsSync(join(process.cwd(), '.strain.json'))
+
+  // When launched manually from a worktree dir, set the env vars that would
+  // normally be injected by launchStrainPane so the rest of the app behaves
+  // identically to a tmux-launched strain.
+  if (isStrain && !process.env['AGENT_IS_STRAIN']) {
+    process.env['AGENT_IS_STRAIN'] = '1'
+    if (!process.env['AGENT_INSTANCE_NAME']) {
+      const cfg = readStrainConfig(process.cwd())
+      if (cfg?.name) process.env['AGENT_INSTANCE_NAME'] = cfg.name
+    }
+  }
+
   const [state, setState] = useState<AppState>(() => {
+    // Hydrate spawnedChildren from existing child/* git branches on startup
+    const existingChildren = process.env['AGENT_IS_CHILD'] !== '1' && !isStrain
+      ? (ALL_GENOMES.find(g => g.id === 'div')?.getInitialChildren?.() ?? []).map(c => ({
+          slug: c.slug,
+          paneId: '',           // pane may no longer exist; unknown after restart
+          sessionName: `child-${c.slug}`,
+          spawnedAt: c.spawnedAt,
+          genome: [],
+        }))
+      : []
     const resolvedSession = sessionName ?? 'default'
     const childSlug = process.env['AGENT_CHILD_SLUG']
     const branch = spawnSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).stdout.trim() || 'main'
     const name = childSlug ? `child/${childSlug}` : branch
+    // Read strain config from cwd if running as a strain
+    const strainConfig = isStrain ? readStrainConfig(process.cwd()) : null
     return makeInitialState({
       sessionId: sessionId ?? crypto.randomUUID(),
       sessionName: resolvedSession,
       justReloaded: justReloaded ?? false,
       reloadedPatchInfo,
       paneId: process.env.TMUX_PANE ?? '',
-      genome: genomeFilter,
+      genome: strainConfig ? strainConfig.genome : genomeFilter,
+      childCount: existingChildren.length,
+      spawnedChildren: existingChildren,
       instanceName: name,
+      strainConfig,
     })
   })
 
   // Register pane title so external tools can target this agent instance by name.
   // Use -t $TMUX_PANE to target agent's OWN pane (not the currently active pane).
-  // Write per-instance file ~/.agent/panes/<instanceName> so main/child/strain
   // instances never clobber each other's pane registration.
   useEffect(() => {
     const paneId = process.env['TMUX_PANE']
@@ -127,12 +154,15 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
       copyToastTimerRef.current = setTimeout(() => setCopyToast(null), 2500)
     }, []),
     useCallback((row: number) => {
-      // Mouse press in footer area while a pane is open → close pane, focus input
-      const rows = process.stdout.rows ?? 24
-      const fH = stateRef.current.inputValue.startsWith('/') ? 4 : 3  // rough footer height
-      if (row >= rows - fH && isBottomPanelMode(stateRef.current.mode)) {
+      // Single click anywhere while a panel is open → close panel and focus input
+      if (isBottomPanelMode(stateRef.current.mode)) {
         setState(prev => ({ ...prev, mode: 'agent' }))
+        return
       }
+      // Single click in footer area (no panel open) → still focus input (no-op, already focused)
+      const rows = process.stdout.rows ?? 24
+      const fH = stateRef.current.inputValue.startsWith('/') ? 4 : 3
+      void (row >= rows - fH) // suppress unused warning
     }, [])
   )
 
@@ -277,6 +307,8 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
           offlineMailCheckedRef.current = true
           const senders = [...new Set(offline.map(e => e.from))].join(', ')
           addSystemMessage(setState, 'info', `\uD83D\uDCEC ${offline.length} message(s) queued while offline from: ${senders}`)
+          // Queue as a single bundled inject with an explicit user-confirmation wrapper.
+          // The AI will use ask_user to let the user decide before acting.
           const bundle = offline.map(e => `[from ${e.from}]: ${e.content}`).join('\n\n')
           pendingInjectRef.current.push({
             id: `offline-bundle-${Date.now()}`,
@@ -548,9 +580,8 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
   const panelSize = (active: boolean, minH = 9) => active
     ? Math.min(Math.max(minH, Math.min(availableForContent - 4, 20)), availableForContent) + 1
     : 0
-  const ctxPanelH     = panelSize(state.mode === 'ctx', 12)
-  const everyPanelH   = panelSize(state.mode === 'every', 12)
-  const messagePanelH = panelSize(state.mode === 'message-picker', 12)
+  const ctxPanelH    = panelSize(state.mode === 'ctx', 12)
+  const everyPanelH  = panelSize(state.mode === 'every', 12)
   const bottomPanelH = isBottomPanelMode(state.mode) ? panelSize(true) : 0
   // Slash menu: suppress when awaiting ask_user answer (user input has different purpose)
   const slashMenuOpen = !state.isStreaming && !pendingQuestion && state.inputValue.startsWith('/')
@@ -595,8 +626,16 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
               <>
                 <Box height={msgAreaHeight} flexDirection="column" overflow="hidden">
                   {(() => {
-                    const companionRender = (topClip: number) => <GengharSprite topClip={topClip} />
-                    const welcomeHeight = 3 + GENGHAR_HEIGHT + 1 + (state.messages.length > 0 ? 0 : 1)
+                    const divGenome = activeGenomes.find(g => g.id === 'div')
+                    const companionRender = divGenome?.welcomeContent
+                      ? (topClip: number) => divGenome.welcomeContent!({
+                          isPetting: state.isPetting,
+                          onPetEnd: () => setState(prev => ({ ...prev, isPetting: false })),
+                          identityName: state.strainConfig?.name ?? state.instanceName ?? 'main',
+                          topClip,
+                        })
+                      : undefined
+                    const welcomeHeight = divGenome?.welcomeHeight?.(state.messages.length > 0)
                     return (
                       <MessageHistory
                         msgAreaHeight={msgAreaHeight}
@@ -645,17 +684,6 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
                       cols={termCols}
                       engineRef={engineRef as React.MutableRefObject<QueryEngine>}
                       stateRef={stateRef}
-                    />
-                  </BottomPanel>
-                )}
-
-                {/* message panel - send messages to other agents */}
-                {state.mode === 'message-picker' && (
-                  <BottomPanel height={messagePanelH - 1} borderColor={theme.brand}>
-                    <MessagePanel
-                      panelHeight={messagePanelH - 2}
-                      cols={termCols}
-                      selfSession={state.sessionName}
                     />
                   </BottomPanel>
                 )}

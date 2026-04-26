@@ -14,6 +14,9 @@ export type StrainConfig = {
   genome: string[]
   systemPrompt: string
   graduatedUrl?: string
+  // Skills to pre-install and load on startup (but not auto-invoked into context).
+  // Same format as the 'a' add-skill input: owner/repo[@sha], owner/repo/subpath[@sha], or /local/path
+  defaultSkills?: string[]
 }
 
 const STRAIN_CONFIG_FILE = '.strain.json'

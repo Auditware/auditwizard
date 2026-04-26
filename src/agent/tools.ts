@@ -1,4 +1,5 @@
 // Built-in tools available to the agent.
+// Each tool runs locally in the agent process.
 
 import { execSync } from 'child_process'
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs'
@@ -139,7 +140,7 @@ export const fetchUrlTool: Tool = {
     if (!url) return 'Error: url is required'
     try {
       const res = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Agent/1.0; +https://github.com/auditware)' },
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Agent/1.0; +https://github.com/auditware/auditwizard)' },
         signal: AbortSignal.timeout(15_000),
       })
       if (!res.ok) return `HTTP ${res.status}: ${res.statusText}`

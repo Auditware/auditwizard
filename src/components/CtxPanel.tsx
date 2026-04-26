@@ -54,7 +54,7 @@ export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onRese
       onReset()
       return
     }
-    if (key.escape || input === 'q') {
+    if (key.escape || key.return || input === 'q') {
       onClose()
     }
   })
@@ -65,13 +65,24 @@ export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onRese
   const pct = modelLimit > 0 ? Math.min(99, Math.round((displayTotal / modelLimit) * 100)) : 0
   const isEst = totalActual === 0
 
-  const COLS = Math.min(52, Math.max(30, cols - 6))
-  const ROWS = 3
+  const COLS = Math.min(44, Math.max(26, cols - 8))
+  const ROWS = 4
   const totalDots = COLS * ROWS
   const OUTPUT_RESERVED = 8_096
 
-  const seg = (n: number, ch: string) =>
-    ch.repeat(Math.max(0, Math.round((n / (modelLimit || 1)) * totalDots)))
+  // Per-segment colors - used in both dot map and legend
+  const segColors = {
+    sys:      theme.brand,       // violet
+    tools:    theme.warning,     // amber
+    history:  theme.suggestion,  // sky blue
+    reserved: theme.error,       // red
+    free:     theme.inactive,    // gray
+  }
+
+  const seg = (n: number, ch: string) => {
+    if (n <= 0) return ''
+    return ch.repeat(Math.max(1, Math.round((n / (modelLimit || 1)) * totalDots)))
+  }
   const sysDots  = seg(systemBase + compactionSummary, '█')
   const toolDots = seg(tools, '▓')
   const histDots = seg(history, '▒')
@@ -80,61 +91,97 @@ export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onRese
   const freeDots = '·'.repeat(Math.max(0, totalDots - used))
   const dots     = (sysDots + toolDots + histDots + outDots + freeDots).slice(0, totalDots)
 
+  // Segment boundaries for colored dot map rendering
+  const dotSegs = [
+    { end: sysDots.length,                                                               color: segColors.sys },
+    { end: sysDots.length + toolDots.length,                                             color: segColors.tools },
+    { end: sysDots.length + toolDots.length + histDots.length,                           color: segColors.history },
+    { end: sysDots.length + toolDots.length + histDots.length + outDots.length,          color: segColors.reserved },
+    { end: totalDots,                                                                     color: segColors.free },
+  ]
+
+  const getRowSpans = (r: number) => {
+    const rowStart = r * COLS
+    const rowEnd   = (r + 1) * COLS
+    let prev = 0
+    return dotSegs.flatMap(({ end, color }) => {
+      const s = Math.max(prev, rowStart)
+      const e = Math.min(end, rowEnd)
+      prev = end
+      return s < e ? [{ text: dots.slice(s, e), color }] : []
+    })
+  }
+
   const fmt  = (n: number) => n.toLocaleString()
-  const pctS = (n: number) =>
-    displayTotal > 0 ? `${Math.round((n / displayTotal) * 100)}%`.padStart(4) : '  0%'
+  const pctOf = (n: number) => {
+    if (modelLimit <= 0) return '  0%'
+    const p = Math.round((n / modelLimit) * 100)
+    if (p === 0 && n > 0) return ' <1%'
+    return `${p}%`.padStart(4)
+  }
+
+  const reserved = OUTPUT_RESERVED
+  const free = Math.max(0, modelLimit - displayTotal - OUTPUT_RESERVED)
+
+  const rows: Array<{ glyph: string; label: string; value: number; color: string }> = [
+    { glyph: '█', label: 'sys',      value: systemBase + compactionSummary, color: segColors.sys },
+    { glyph: '▓', label: 'tools',    value: tools,                          color: segColors.tools },
+    { glyph: '▒', label: 'history',  value: history,                        color: segColors.history },
+    { glyph: '░', label: 'reserved', value: reserved,                       color: segColors.reserved },
+    { glyph: '·', label: 'free',     value: free,                           color: segColors.free },
+  ]
 
   const totalLabel = `${isEst ? '~' : ''}${fmt(displayTotal)} / ${fmt(modelLimit)} (${pct}%${isEst ? ' est' : ''})`
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {/* Header */}
-      <Box justifyContent="space-between">
-        <Text color={theme.brand} bold>context  </Text>
+      {/* Header: total usage only */}
+      <Box gap={2}>
+        <Text color={theme.brand} bold>context</Text>
         <Text color={pct > 80 ? theme.error : pct > 50 ? theme.warning : theme.success}>
           {totalLabel}
         </Text>
-        <Text color={theme.inactive}>  █sys ▓tools ▒history ░reserved · free</Text>
       </Box>
 
-      {/* Dot map - live */}
-      {Array.from({ length: ROWS }, (_, r) => (
-        <Text key={r} color={justReset ? theme.success : theme.inactive}>
-          {dots.slice(r * COLS, (r + 1) * COLS)}
-        </Text>
-      ))}
-
-      {/* Stats row */}
-      <Box gap={2} marginTop={0}>
-        <Text color={theme.inactive}>
-          {'sys '}
-          <Text color={theme.text}>{fmt(systemBase + compactionSummary).padStart(7)}</Text>
-          {' ' + pctS(systemBase + compactionSummary)}
-          {compactionSummary > 0 ? <Text color={theme.inactive}> (compacted)</Text> : null}
-        </Text>
-        <Text color={theme.inactive}>
-          {'tools '}
-          <Text color={theme.text}>{fmt(tools).padStart(7)}</Text>
-          {' ' + pctS(tools)}
-        </Text>
-      </Box>
-      <Box gap={2}>
-        <Text color={theme.inactive}>
-          {'hist '}
-          <Text color={history > 0 ? theme.warning : theme.text}>{fmt(history).padStart(7)}</Text>
-          {' ' + pctS(history)}
-        </Text>
-        <Text color={theme.inactive}>
-          {'free '}
-          <Text color={theme.success}>{fmt(Math.max(0, modelLimit - displayTotal - OUTPUT_RESERVED)).padStart(7)}</Text>
-        </Text>
+      {/* Dot map - each segment colored */}
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {Array.from({ length: ROWS }, (_, r) => (
+          <Text key={r}>
+            {justReset
+              ? <Text color={theme.success}>{dots.slice(r * COLS, (r + 1) * COLS)}</Text>
+              : getRowSpans(r).map((span, i) => (
+                  <Text key={i} color={span.color}>{span.text}</Text>
+                ))
+            }
+          </Text>
+        ))}
       </Box>
 
-      {/* Hint bar */}
-      <Box marginTop={0}>
+      {/* Stats table - each row is exactly COLS chars wide to match the dot map */}
+      <Box flexDirection="column">
+        {rows.map(({ glyph, label, value, color }) => {
+          // glyph(1) + ' '(1) + label.padEnd(9)(9) + value.padStart(X) + ' '(1) + pct(4) = COLS
+          // X = COLS - 16
+          const valWidth = Math.max(9, COLS - 16)
+          return (
+            <Text key={label}>
+              <Text color={color}>{glyph}</Text>
+              <Text color={theme.inactive}> {label.padEnd(9)}</Text>
+              <Text color={theme.text}>{fmt(value).padStart(valWidth)}</Text>
+              <Text color={theme.inactive}> {pctOf(value)}</Text>
+              {label === 'sys' && compactionSummary > 0
+                ? <Text color={theme.inactive}> (compacted)</Text>
+                : null}
+            </Text>
+          )
+        })}
+      </Box>
+
+      {/* Hint */}
+      <Box marginTop={1}>
         {justReset
           ? <Text color={theme.success} bold>  context cleared</Text>
-          : <Text color={theme.inactive}>  <Text color={theme.brand} bold>r</Text> reset context  <Text color={theme.inactive}>q/Esc</Text> close</Text>
+          : <Text color={theme.inactive}>  <Text color={theme.brand} bold>r</Text> reset  <Text color={theme.inactive}>Enter/Esc</Text> close</Text>
         }
       </Box>
     </Box>

@@ -42,6 +42,7 @@ type SkillEvent =
   | { type: 'removed'; slug: string; path: string }
   | { type: 'error'; path: string; message: string }
   | { type: 'warning'; skill: LoadedSkill; categories: string[] }
+  | { type: 'needs-approval'; skill: LoadedSkill; categories: string[]; approve: (allow: boolean) => void }
 
 type SkillEventHandler = (event: SkillEvent) => void
 
@@ -76,7 +77,13 @@ function buildInvokeSkillTool(skills: Map<string, LoadedSkill>, engine: QueryEng
       const scanResult = await scanSkill(skill.content)
       if (!scanResult.allPassed) {
         const failed = scanResult.checks.filter(c => !c.passed).map(c => c.category)
-        emit({ type: 'warning', skill, categories: failed })
+        // Block invocation until user explicitly approves or denies
+        const approved = await new Promise<boolean>(resolve => {
+          emit({ type: 'needs-approval', skill, categories: failed, approve: resolve })
+        })
+        if (!approved) {
+          return `⛔ Skill "${skill.name}" blocked - guardrail violations: ${failed.join(', ')}`
+        }
       }
 
       // Store skill content out-of-band in the engine's system prompt section
@@ -253,5 +260,46 @@ export class SkillWatcher {
       }
     }
     this.refreshTool()
+  }
+
+  /** Toggle a single skill on or off immediately. */
+  toggleSkill(slug: string): void {
+    const current = new Set(this.enabledSlugs ?? this.loadedSkills.keys())
+    if (current.has(slug)) current.delete(slug)
+    else current.add(slug)
+    this.setEnabled(current)
+  }
+
+  /** Add a session-local skill (from a custom path, not watched). Emits 'ready'. */
+  addSessionSkill(skill: LoadedSkill): void {
+    this.allSkills.set(skill.slug, skill)
+    this.pathToSlug.set(skill.path, skill.slug)
+    // Auto-enable unless explicit selection excludes it
+    if (this.enabledSlugs === null || this.enabledSlugs.has(skill.slug)) {
+      this.loadedSkills.set(skill.slug, skill)
+      this.registerSkillSlashCmd(skill)
+      this.refreshTool()
+    }
+    this.emit({ type: 'ready', count: this.loadedSkills.size })
+  }
+
+  /** Invoke a skill by slug, running the full scan+approval+register pipeline. */
+  async invokeSkill(slug: string): Promise<string> {
+    const skill = this.loadedSkills.get(slug) ?? this.allSkills.get(slug)
+    if (!skill) return `Unknown skill "${slug}"`
+
+    const scanResult = await scanSkill(skill.content)
+    if (!scanResult.allPassed) {
+      const failed = scanResult.checks.filter(c => !c.passed).map(c => c.category)
+      const approved = await new Promise<boolean>(resolve => {
+        this.emit({ type: 'needs-approval', skill, categories: failed, approve: resolve })
+      })
+      if (!approved) {
+        return `⛔ Skill "${skill.name}" blocked - guardrail violations: ${failed.join(', ')}`
+      }
+    }
+
+    this.engine.registerSkillContent(skill.slug, skill.name, skill.content)
+    return `✓ skill "${skill.name}" invoked`
   }
 }
