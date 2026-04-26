@@ -1,9 +1,11 @@
 // Command module types - composable slash command architecture.
 // Each SlashCommandModule is a self-contained unit: metadata + handler + genome tags.
+// Genome tags control which commands are inherited when spawning children.
 
 import type { Dispatch, SetStateAction, MutableRefObject } from 'react'
 import type { AppState } from '../app/AppState.js'
 import type { QueryEngine } from '../agent/QueryEngine.js'
+import type { Tool } from '../agent/QueryEngine.js'
 import type { GenomePanelRegistry } from './GenomePanelRegistry.js'
 
 // Context passed to every command handler at dispatch time.
@@ -24,10 +26,12 @@ export type CommandContext = {
 export type SlashCommandModule = {
   cmd: string       // e.g. '/sessions'
   desc: string
-  usage?: string    // shown in /help, e.g. '/help'
+  usage?: string    // shown in /help, e.g. '/spawn <intent>'
   shortcut?: string // keyboard shortcut label, e.g. 'Ctrl+S'
   genome: string[]  // genome group tags this command belongs to
   handler: (args: string, ctx: CommandContext) => void | Promise<void>
+  // Agent tools this command feature brings. Registered on engine startup.
+  tools?: Tool[]
 }
 
 // Known genome groups - any custom genome tags are also valid strings.

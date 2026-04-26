@@ -2,6 +2,7 @@
 // The defaultRegistry singleton is populated at module load time by importing command modules.
 
 import type { SlashCommandModule, CommandContext } from './types.js'
+import type { Tool } from '../agent/QueryEngine.js'
 
 export class CommandRegistry {
   private modules: SlashCommandModule[] = []
@@ -26,6 +27,13 @@ export class CommandRegistry {
   // Return only modules whose genome array intersects with the given tags.
   getForGenome(genomes: string[]): SlashCommandModule[] {
     return this.modules.filter(m => m.genome.some(g => genomes.includes(g)))
+  }
+
+  // Collect all agent tools declared by registered command modules.
+  // Pass genomes to restrict to a specific genome set, or omit for all.
+  getAllTools(genomes?: string[]): Tool[] {
+    const modules = genomes ? this.getForGenome(genomes) : this.modules
+    return modules.flatMap(m => m.tools ?? [])
   }
 
   // Dispatch a submitted value to the matching handler.

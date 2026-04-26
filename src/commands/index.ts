@@ -10,6 +10,8 @@ import { exitCommand } from './exit.js'
 import { buildHelpCommand } from './help.js'
 import { everyCommand } from './every.js'
 import { messageCommands } from './message.js'
+import { tasksCommands } from './tasks.js'
+import { wardenCommands } from './warden.js'
 
 defaultRegistry.register(clearCommand)
 defaultRegistry.register(idCommand)
@@ -17,6 +19,8 @@ defaultRegistry.register(ctxCommand)
 defaultRegistry.register(exitCommand)
 defaultRegistry.register(everyCommand)
 messageCommands.forEach(c => defaultRegistry.register(c))
+defaultRegistry.registerAll(tasksCommands)
+defaultRegistry.registerAll(wardenCommands)
 
 // /help needs the full list - register last
 defaultRegistry.register(buildHelpCommand(() => defaultRegistry.getAll()))

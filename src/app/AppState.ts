@@ -41,10 +41,11 @@ export type AppMode =
   | 'skill-picker'       // interactive skill enable/disable picker
   | 'model-picker'       // model selection (mem genome)
   | 'api-key-input'      // API key entry (mem genome)
+  | 'warden'       // DailyWarden contest browser
 
 // Modes that render a bottom panel (suppresses companion, locks prompt, sizes panel).
 // Add new bottom-panel slash commands here - the rest of App.tsx derives automatically.
-export const BOTTOM_PANEL_MODES = ['session', 'ctx', 'every', 'message-picker', 'skill-picker', 'model-picker', 'api-key-input'] as const
+export const BOTTOM_PANEL_MODES = ['session', 'ctx', 'every', 'message-picker', 'skill-picker', 'model-picker', 'api-key-input', 'warden'] as const
 export type BottomPanelMode = typeof BOTTOM_PANEL_MODES[number]
 export const isBottomPanelMode = (mode: AppMode): mode is BottomPanelMode =>
   (BOTTOM_PANEL_MODES as readonly string[]).includes(mode)

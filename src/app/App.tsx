@@ -9,12 +9,12 @@ import PromptInput from '../components/PromptInput.js'
 import MessageHistory from '../components/MessageHistory.js'
 import CtxPanel from '../components/CtxPanel.js'
 import EveryPanel from '../commands/EveryPanel.js'
+import WardenPanel from '../components/WardenPanel.js'
 import { QueryEngine } from '../agent/QueryEngine.js'
 import { BUILTIN_TOOLS } from '../agent/tools.js'
 import {
   askUserTool, replTool, scheduleCronTool,
-  cronListTool, cronDeleteTool, briefTool,
-  taskCreateTool, taskListTool, taskGetTool, taskUpdateTool,
+  cronListTool, cronDeleteTool,
   createConfigTool, createAgentTool, createToolSearchTool, createTaskOutputTool,
 } from '../agent/extraTools.js'
 import { userInputChannel, type PendingQuestion } from '../utils/userInputChannel.js'
@@ -173,17 +173,17 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
     for (const tool of BUILTIN_TOOLS) {
       engineRef.current.registerTool(tool)
     }
-    // Extra tools registered once - state setters are stable React references
+    // Primitive interaction tools (no command module home)
     engineRef.current.registerTool(askUserTool)
     engineRef.current.registerTool(replTool)
+    // Automation tools (separate subsystem from /every)
     engineRef.current.registerTool(scheduleCronTool)
     engineRef.current.registerTool(cronListTool)
     engineRef.current.registerTool(cronDeleteTool)
-    engineRef.current.registerTool(briefTool)
-    engineRef.current.registerTool(taskCreateTool)
-    engineRef.current.registerTool(taskListTool)
-    engineRef.current.registerTool(taskGetTool)
-    engineRef.current.registerTool(taskUpdateTool)
+    // Tools declared on command modules (brief, task CRUD via /tasks, warden via /warden, etc.)
+    for (const tool of defaultRegistry.getAllTools()) {
+      engineRef.current.registerTool(tool)
+    }
   }
 
   // Always-current state ref for callbacks that outlive renders
@@ -582,6 +582,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
     : 0
   const ctxPanelH    = panelSize(state.mode === 'ctx', 12)
   const everyPanelH  = panelSize(state.mode === 'every', 12)
+  const wardenPanelH = panelSize(state.mode === 'warden')
   const bottomPanelH = isBottomPanelMode(state.mode) ? panelSize(true) : 0
   // Slash menu: suppress when awaiting ask_user answer (user input has different purpose)
   const slashMenuOpen = !state.isStreaming && !pendingQuestion && state.inputValue.startsWith('/')
@@ -684,6 +685,17 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
                       cols={termCols}
                       engineRef={engineRef as React.MutableRefObject<QueryEngine>}
                       stateRef={stateRef}
+                    />
+                  </BottomPanel>
+                )}
+
+                {/* warden panel - rna genome, contest browser */}
+                {state.mode === 'warden' && (
+                  <BottomPanel height={wardenPanelH - 1} borderColor={theme.brand}>
+                    <WardenPanel
+                      height={wardenPanelH - 2}
+                      cols={termCols}
+                      onClose={() => setState(prev => ({ ...prev, mode: 'agent' }))}
                     />
                   </BottomPanel>
                 )}
