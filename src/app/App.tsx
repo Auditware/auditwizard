@@ -9,6 +9,7 @@ import PromptInput from '../components/PromptInput.js'
 import MessageHistory from '../components/MessageHistory.js'
 import CtxPanel from '../components/CtxPanel.js'
 import EveryPanel from '../commands/EveryPanel.js'
+import TasksPanel from '../components/TasksPanel.js'
 import WardenPanel from '../components/WardenPanel.js'
 import { QueryEngine } from '../agent/QueryEngine.js'
 import { BUILTIN_TOOLS } from '../agent/tools.js'
@@ -36,6 +37,7 @@ import { join } from 'path'
 import { readUnread, markRead, heartbeat, listOnline } from '../utils/mailbox.js'
 import { getDueTasks, advanceIntervalTask } from '../utils/intervalTasks.js'
 import { ALL_GENOMES } from '../genomes/index.js'
+import { onGlobalAbort, isGlobalStreaming } from '../utils/abortSignal.js'
 
 const AWAY_THRESHOLD_MS = 30 * 60 * 1000  // 30 minutes
 
@@ -107,10 +109,12 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
       : []
     const resolvedSession = sessionName ?? 'default'
     const childSlug = process.env['AGENT_CHILD_SLUG']
-    const branch = spawnSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).stdout.trim() || 'main'
-    const name = childSlug ? `child/${childSlug}` : branch
     // Read strain config from cwd if running as a strain
     const strainConfig = isStrain ? readStrainConfig(process.cwd()) : null
+    const wardenName = process.env['WARDEN_CONTEST_NAME']
+    const name = childSlug
+      ? `child/${childSlug}`
+      : strainConfig?.name ?? (wardenName ? `audit-wizard/${wardenName}` : 'audit-wizard')
     return makeInitialState({
       sessionId: sessionId ?? crypto.randomUUID(),
       sessionName: resolvedSession,
@@ -190,6 +194,18 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state })
 
+  // Global Ctrl+C abort - wired at raw stdin level in cli.tsx for immediate response
+  useEffect(() => {
+    return onGlobalAbort(() => {
+      // Use isGlobalStreaming (synchronous engine flag) not React state -
+      // stateRef.current.isStreaming may still be false if React hasn't re-rendered yet
+      if (isGlobalStreaming) {
+        engineRef.current?.abort()
+        setPendingQuestion(null)
+      }
+    })
+  }, [])
+
   // Tracks whether an ask_user question is pending so the mailbox poller doesn't
   // inject new messages mid-turn while isStreaming is temporarily false.
   const pendingQuestionRef = useRef<PendingQuestion | null>(null)
@@ -208,10 +224,13 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
     hotReloaderRef.current = new HotReloader()
   }
 
-  // HotReloader - start watching src/ for live changes (skipped for strains)
+  // HotReloader - start watching src/ for live changes (skipped for strains and spawned audit panes)
   useEffect(() => {
     const reloader = hotReloaderRef.current
     if (!reloader) return
+    // Don't hot-reload in spawned audit panes - they're ephemeral audit contexts,
+    // not development instances, and would disruptively reload on any src/ change.
+    if (process.env['WARDEN_AUDIT_PANE'] === '1') return
     reloader.start(() => stateRef.current, setState)
     return () => reloader.stop()
   }, [])
@@ -273,7 +292,16 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
     } catch { /* non-fatal -- bad seed file is silently ignored */ }
   }, [])
 
-  // Timestamp captured at mount - used to distinguish messages queued while offline
+  // Auto-submit warden audit seed prompt when spawned from warden panel
+  useEffect(() => {
+    const seed = process.env['WARDEN_SEED_PROMPT']?.trim()
+    if (!seed) return
+    addSystemMessage(setState, 'info', `⚔ Warden audit: ${process.env['WARDEN_CONTEST_NAME'] ?? ''}`)
+    setTimeout(() => {
+      engineRef.current?.submit(seed, stateRef.current, setState)
+    }, 1200)
+  }, [])
+
   // from messages that arrive during this live session.
   const startupTimeRef = useRef(Date.now())
   // Whether we've already surfaced the offline-queued mail prompt this session.
@@ -537,7 +565,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
       return
     }
 
-    setState(prev => ({ ...prev, isStreaming: true }))
+    setState(prev => ({ ...prev, isStreaming: true, scrollOffset: 0 }))
 
     // We need current state snapshot for the engine call
     setState(prev => {
@@ -551,6 +579,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
           { id: crypto.randomUUID(), role: 'user' as const, content: displayContent, timestamp: Date.now() },
         ],
         isStreaming: true,
+        scrollOffset: 0,
       }
       engineRef.current!.submit(value, updatedState, setState, attachments).catch(err => {
         addSystemMessage(setState, 'error', `Engine error: ${err instanceof Error ? err.message : String(err)}`)
@@ -569,6 +598,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
   const _hasOverflowIndicator = _estimatedWrapped > 5
   const footerHBase = 1 /* divider */ +
     (copyToast ? 1 : 0) /* toast */ +
+    (state.contextPressure !== 'none' ? 1 : 0) /* context pressure banner */ +
     1 /* scroll hint slot (always reserved) */ +
     1 /* status */ +
     1 /* input paddingTop */ +
@@ -582,6 +612,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
     : 0
   const ctxPanelH    = panelSize(state.mode === 'ctx', 12)
   const everyPanelH  = panelSize(state.mode === 'every', 12)
+  const tasksPanelH  = panelSize(state.mode === 'tasks', 12)
   const wardenPanelH = panelSize(state.mode === 'warden')
   const bottomPanelH = isBottomPanelMode(state.mode) ? panelSize(true) : 0
   // Slash menu: suppress when awaiting ask_user answer (user input has different purpose)
@@ -665,7 +696,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
                 ))}
 
                 {/* ctx panel - nuc genome, always available */}
-                {state.mode === 'ctx' && (
+                {state.mode === 'ctx' && activeGenomeIds.includes('nuc') && (
                   <BottomPanel height={ctxPanelH - 1} borderColor={theme.brand}>
                     <CtxPanel
                       panelHeight={ctxPanelH - 2}
@@ -673,12 +704,13 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
                       engineRef={engineRef as React.MutableRefObject<QueryEngine>}
                       onClose={() => setState(prev => ({ ...prev, mode: 'agent' }))}
                       onReset={() => setState(prev => ({ ...prev, mode: 'agent' }))}
+                      onCompact={() => void engineRef.current.compactNow(state, setState)}
                     />
                   </BottomPanel>
                 )}
 
                 {/* every panel - nuc genome, interval task manager */}
-                {state.mode === 'every' && (
+                {state.mode === 'every' && activeGenomeIds.includes('nuc') && (
                   <BottomPanel height={everyPanelH - 1} borderColor={theme.brand}>
                     <EveryPanel
                       panelHeight={everyPanelH - 2}
@@ -689,8 +721,15 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
                   </BottomPanel>
                 )}
 
+                {/* tasks panel - nuc genome, agent task board viewer */}
+                {state.mode === 'tasks' && activeGenomeIds.includes('nuc') && (
+                  <BottomPanel height={tasksPanelH - 1} borderColor={theme.brand}>
+                    <TasksPanel panelHeight={tasksPanelH - 2} cols={termCols} />
+                  </BottomPanel>
+                )}
+
                 {/* warden panel - rna genome, contest browser */}
-                {state.mode === 'warden' && (
+                {state.mode === 'warden' && activeGenomeIds.includes('rna') && (
                   <BottomPanel height={wardenPanelH - 1} borderColor={theme.brand}>
                     <WardenPanel
                       height={wardenPanelH - 2}
@@ -712,6 +751,15 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
               <Text color={theme.brand}>{copyToast}</Text>
             </Box>
           )}
+          {state.contextPressure !== 'none' && (
+            <Box paddingX={2}>
+              <Text color={state.contextPressure === 'critical' ? 'red' : 'yellow'}>
+                {state.contextPressure === 'critical'
+                  ? '⚠ context critical - compacting next turn'
+                  : '◆ context filling - use /ctx c to compact early'}
+              </Text>
+            </Box>
+          )}
           <Box paddingX={2} height={1}>
             {state.scrollOffset > 0 && (
               <Text color={theme.inactive} dimColor>scroll mode · scroll down to return</Text>
@@ -721,6 +769,7 @@ export default function App({ sessionId, sessionName, justReloaded, reloadedPatc
           <PromptInput
             onSubmit={handleSubmit}
             onAbort={() => { engineRef.current?.abort(); setPendingQuestion(null) }}
+            onSteer={(text, att) => { engineRef.current?.steer(text, setState, () => stateRef.current, att) }}
             overlayOpen={showAwayDialog || isBottomPanelMode(state.mode)}
             slashMenuMaxRows={slashMenuMaxRows}
             commands={activeCommands}

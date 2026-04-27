@@ -39,14 +39,14 @@ export default function SkillApprovalPanel({ skill, categories, onDecide }: Prop
       <Box flexDirection="column">
         <Text color={theme.subtle}>violations detected:</Text>
         {categories.map(c => (
-          <Text key={c} color={theme.error}>  · {c}</Text>
+          <Text key={c} color={theme.error}>{`  · ${c}`}</Text>
         ))}
       </Box>
 
-      <Box marginTop={1}>
+      <Box gap={0}>
         <Text color={theme.subtle}>load anyway?  </Text>
         <Text color={theme.warning} bold>y</Text>
-        <Text color={theme.subtle}> yes · </Text>
+        <Text color={theme.subtle}> yes  </Text>
         <Text color={theme.brand} bold>n</Text>
         <Text color={theme.subtle}> block</Text>
       </Box>

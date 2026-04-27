@@ -34,3 +34,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 TODO.md
 .vscode/
+
+# Contest PoCs and downloaded code (audit-wizard strain)
+# These are stored under ~/.agents/auditwizard/contests/ - not in this repo
+# If you clone contest repos locally inside the project, ignore them:
+contests/*/pocs/
+contests/*/code/

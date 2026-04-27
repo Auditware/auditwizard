@@ -45,7 +45,7 @@ export type AppMode =
 
 // Modes that render a bottom panel (suppresses companion, locks prompt, sizes panel).
 // Add new bottom-panel slash commands here - the rest of App.tsx derives automatically.
-export const BOTTOM_PANEL_MODES = ['session', 'ctx', 'every', 'message-picker', 'skill-picker', 'model-picker', 'api-key-input', 'warden'] as const
+export const BOTTOM_PANEL_MODES = ['session', 'ctx', 'every', 'tasks', 'message-picker', 'skill-picker', 'model-picker', 'api-key-input', 'warden'] as const
 export type BottomPanelMode = typeof BOTTOM_PANEL_MODES[number]
 export const isBottomPanelMode = (mode: AppMode): mode is BottomPanelMode =>
   (BOTTOM_PANEL_MODES as readonly string[]).includes(mode)
@@ -71,6 +71,7 @@ export type AppState = {
   cwd: string
   isCompacting: boolean        // compact API call in flight
   lastInputTokens: number      // tokens sent in last API call
+  contextPressure: 'none' | 'warn' | 'critical'  // live token pressure level
   sessionTokens: number        // cumulative tokens this session
   sessionInputTokens: number   // cumulative input tokens (for cost)
   sessionOutputTokens: number  // cumulative output tokens (for cost)
@@ -104,6 +105,7 @@ export function makeInitialState(overrides?: Partial<AppState>): AppState {
     cwd: process.cwd(),
     isCompacting: false,
     lastInputTokens: 0,
+    contextPressure: 'none',
     sessionTokens: 0,
     sessionInputTokens: 0,
     sessionOutputTokens: 0,

@@ -1,9 +1,11 @@
 // Warden command module - /warden opens the contest browser panel.
+// Owns: dailyWardenTool (contest fetch) + pocTool (PoC execution)
 // genome: ['rna'] - audit-wizard strain only.
 
 import type { Tool } from '../agent/QueryEngine.js'
 import type { SlashCommandModule } from './types.js'
 import { fetchDailyWardenContests } from '../utils/wardenData.js'
+import { pocTool } from '../utils/poc.js'
 
 // ─── daily_warden agent tool ──────────────────────────────────────────────────
 
@@ -59,7 +61,7 @@ export const wardenCommands: SlashCommandModule[] = [
     desc: 'browse active audit contests from dailywarden.com',
     usage: '/warden',
     genome: ['rna'],
-    tools: [dailyWardenTool],
+    tools: [dailyWardenTool, pocTool],
     handler(_args, ctx) {
       ctx.setState(prev => ({ ...prev, mode: 'warden' as import('../app/AppState.js').AppMode }))
     },

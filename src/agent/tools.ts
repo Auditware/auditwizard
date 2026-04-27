@@ -24,15 +24,17 @@ export const bashTool: Tool = {
     try {
       const out = execSync(cmd, {
         cwd: process.cwd(),
-        timeout: 30_000,
+        timeout: 120_000,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       return out || '(no output)'
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'stdout' in err && 'stderr' in err) {
-        const e = err as { stdout: string; stderr: string; status: number }
-        return [e.stdout, e.stderr].filter(Boolean).join('\n') || `Exit code: ${e.status}`
+        const e = err as { stdout: string; stderr: string; status: number | null; signal?: string }
+        const output = [e.stdout, e.stderr].filter(Boolean).join('\n')
+        const exitInfo = e.signal ? `killed by signal ${e.signal}` : `exit code: ${e.status ?? 'unknown'}`
+        return output || `(no output, ${exitInfo})`
       }
       return String(err)
     }

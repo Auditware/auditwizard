@@ -27,20 +27,23 @@ Protocols’ understanding of their own code decreases exponentially
 Contests and bug bounties are becoming less efficient (AI submissions make triage harder)
 Responsible protocols still pay for 1–2 audits pre-launch, but auditor reliance on AI (for code interaction, summarization, learning protocols, etc.) is increasing - risking less knowledgeable future auditors
 
-Our goal is to use deep expertise in Ethereum security tooling and AI to shape the human-to-agent interface and standardize this shift—ensuring the ratio of auditors to attackers becomes favorable.
+Our goal is to use deep expertise in Ethereum security tooling and AI to shape the human-to-agent interface and standardize this shift - ensuring the ratio of auditors to attackers becomes favorable.
 
 > [!NOTE]
 > We are working in public and releasing this at a very early stage. please check back for our progress, see high level items below
 
 - [x] secure skills loading to run guardrails and safety check on AI skills
+- [x] github-based skill loading system
 - [x] baked-in recommended AI auditing skills
 - [x] agent messaging system for cross-execution
 - [x] claude models support (bring your own API key)
 - [x] hot-reloaded TUI environment to code audit-wizard as you go
 - [x] context management, compaction, costs tracking
 - [x] easy context window reset
+- [x] layered compaction strategies
 - [x] cron job for recurring tasks
 - [ ] audit contests tracking and management
+- [ ] tmux spin-audit agent on background
 - [ ] baked-in poc reproduction
 - [ ] easy standalone binary distribution
 - [ ] VPS infrastructure for collaborative work 

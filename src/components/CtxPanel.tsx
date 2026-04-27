@@ -1,6 +1,8 @@
 // CtxPanel - interactive context window breakdown panel.
 // Rendered as a bottom drawer when mode === 'ctx'.
 // Press r to reset AI transcript + compaction cache live.
+// Press r to reset AI transcript + compaction cache live.
+// Press c to compact context now (manual trigger).
 // Press Esc or q to close.
 
 import React, { useState, useEffect, useRef } from 'react'
@@ -24,9 +26,10 @@ type Props = {
   engineRef: React.MutableRefObject<QueryEngine>
   onClose: () => void
   onReset: () => void
+  onCompact?: () => void
 }
 
-export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onReset }: Props): React.ReactElement {
+export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onReset, onCompact }: Props): React.ReactElement {
   const { state, setState } = useAppState()
   const [breakdown, setBreakdown] = useState<Breakdown>(() =>
     engineRef.current.getContextBreakdown(state)
@@ -52,6 +55,11 @@ export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onRese
       addSystemMessage(setState, 'success', 'context reset - AI conversation cleared')
       setTimeout(() => setJustReset(false), 2000)
       onReset()
+      return
+    }
+    if (input === 'c' || input === 'C') {
+      onCompact?.()
+      onClose()
       return
     }
     if (key.escape || key.return || input === 'q') {
@@ -181,7 +189,7 @@ export default function CtxPanel({ panelHeight, cols, engineRef, onClose, onRese
       <Box marginTop={1}>
         {justReset
           ? <Text color={theme.success} bold>  context cleared</Text>
-          : <Text color={theme.inactive}>  <Text color={theme.brand} bold>r</Text> reset  <Text color={theme.inactive}>Enter/Esc</Text> close</Text>
+          : <Text color={theme.inactive}>  <Text color={theme.brand} bold>r</Text> reset  <Text color={theme.brand} bold>c</Text> compact  <Text color={theme.inactive}>Enter/Esc</Text> close</Text>
         }
       </Box>
     </Box>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, useStdout } from 'ink'
 import { theme } from '../app/theme.js'
 import { useAppState, type Message, type ToolCall } from '../app/AppState.js'
 
@@ -66,9 +66,11 @@ const STATUS_COLOR: Record<string, string> = {
   done:    theme.success,
   error:   theme.error,
 }
-const COLLAPSE_THRESHOLD = 6
+const COLLAPSE_THRESHOLD = 4
 
 function ToolCallBlock({ tc }: { tc: ToolCall }): React.ReactElement {
+  const { stdout } = useStdout()
+  const maxW = (stdout?.columns ?? 80) - 8  // account for paddingLeft
   const [expanded, setExpanded] = useState(false)
   const icon = STATUS_ICON[tc.status] ?? '○'
   const color = STATUS_COLOR[tc.status] ?? theme.inactive
@@ -81,18 +83,16 @@ function ToolCallBlock({ tc }: { tc: ToolCall }): React.ReactElement {
     <Box flexDirection="column" paddingLeft={2} marginBottom={0}>
       <Box flexDirection="row" gap={1}>
         <Text color={color}>{icon}</Text>
-        <Text color={theme.inactive}>{tc.name}</Text>
+        <Text color={theme.inactive} wrap="truncate">{tc.name}</Text>
         {tc.status === 'running' && <Text color={theme.brand}>...</Text>}
       </Box>
       {tc.result && (
-        <Box flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="column" paddingLeft={2} width={maxW}>
           {visibleLines.map((line, i) => (
-            <Text key={i} color={theme.inactive} dimColor>{line}</Text>
+            <Text key={i} color={theme.inactive} dimColor wrap="truncate">{line}</Text>
           ))}
           {truncated && (
-            <Box marginTop={0}>
-              <Text color={theme.suggestion} dimColor>  ↕ {resultLines.length - COLLAPSE_THRESHOLD} more lines</Text>
-            </Box>
+            <Text color={theme.suggestion} dimColor>  ↕ {resultLines.length - COLLAPSE_THRESHOLD} more lines</Text>
           )}
         </Box>
       )}
@@ -236,14 +236,19 @@ function ChatTurn({ msg, topClip = 0, contentWidth = 80 }: { msg: Message; topCl
   const showHeader = !isUser && topClip < 2
   const contentPaddingTop = !isUser && topClip < 3 ? Math.max(0, 1 - Math.max(0, topClip - 2)) : 0
   const contentSkipRows = isUser ? Math.max(0, topClip - 1) : Math.max(0, topClip - 3)
-  const clippedContent = msg.content ? skipWrappedContent(msg.content, contentSkipRows, contentWidth) : ''
+
+  // Show full message content - rely on virtual scroll viewport for fitting, not per-message cap
+  const fullContent = msg.content ?? ''
+  const clippedContent = fullContent ? skipWrappedContent(fullContent, contentSkipRows, contentWidth) : ''
 
   return (
     <Box flexDirection="column" marginTop={skipMarginAssistant ? 0 : 1}>
       {isUser ? (
-        <Box flexDirection="row" gap={1}>
-          <Text color={theme.brand} bold>❯</Text>
-          <Text color={theme.text} wrap="wrap">{contentSkipRows > 0 ? clippedContent : (msg.content ?? '')}</Text>
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Text color={theme.brand} bold>❯</Text>
+            <Text color={theme.text} wrap="wrap">{contentSkipRows > 0 ? clippedContent : fullContent}</Text>
+          </Box>
         </Box>
       ) : (
         <>
@@ -254,8 +259,8 @@ function ChatTurn({ msg, topClip = 0, contentWidth = 80 }: { msg: Message; topCl
             </Box>
           )}
           <Box paddingLeft={2} paddingTop={contentPaddingTop} flexDirection="column">
-            {(contentSkipRows > 0 ? clippedContent : msg.content) ? (
-              <Text color={theme.text} wrap="wrap">{contentSkipRows > 0 ? clippedContent : msg.content}</Text>
+            {(contentSkipRows > 0 ? clippedContent : fullContent) ? (
+              <Text color={theme.text} wrap="wrap">{contentSkipRows > 0 ? clippedContent : fullContent}</Text>
             ) : null}
             {msg.toolCalls?.map(tc => (
               <ToolCallBlock key={tc.id} tc={tc} />
@@ -267,12 +272,73 @@ function ChatTurn({ msg, topClip = 0, contentWidth = 80 }: { msg: Message; topCl
   )
 }
 
-// ─── Message grouping ────────────────────────────────────────────────────────
-// Groups consecutive system messages into blocks, keeps chat turns as singles.
+// Renders a single assistant iteration body (text + tool calls), no header.
+function AssistantBody({ msg, topClip = 0, contentWidth = 80 }: { msg: Message; topClip?: number; contentWidth?: number }): React.ReactElement {
+  const fullContent = msg.content ?? ''
+  const clippedContent = fullContent ? skipWrappedContent(fullContent, topClip, contentWidth) : ''
+  return (
+    <Box paddingLeft={2} flexDirection="column">
+      {(topClip > 0 ? clippedContent : fullContent) ? (
+        <Text color={theme.text} wrap="wrap">{topClip > 0 ? clippedContent : fullContent}</Text>
+      ) : null}
+      {msg.toolCalls?.map(tc => (
+        <ToolCallBlock key={tc.id} tc={tc} />
+      ))}
+    </Box>
+  )
+}
+
+// Estimate rows consumed by a single AssistantBody (for topClip accounting)
+function estimateBodyLines(msg: Message, contentWidth: number): number {
+  let lines = 0
+  if (msg.content) {
+    lines += msg.content.split('\n').reduce(
+      (sum, ln) => sum + Math.max(1, Math.ceil((ln.length || 1) / contentWidth)), 0
+    )
+  }
+  for (const tc of msg.toolCalls ?? []) {
+    lines += 2
+    if (tc.result) {
+      lines += Math.min(
+        tc.result.split('\n').reduce((sum, ln) => sum + Math.max(1, Math.ceil((ln.length || 1) / contentWidth)), 0),
+        COLLAPSE_THRESHOLD + 1
+      )
+    }
+  }
+  return lines
+}
+
+// Renders all consecutive assistant iterations under a single header.
+function AssistantGroup({ messages, topClip = 0, contentWidth = 80 }: { messages: Message[]; topClip?: number; contentWidth?: number }): React.ReactElement {
+  const { state } = useAppState()
+  const agentName = state.instanceName
+  const skipMargin = topClip > 0
+  const showHeader = topClip < 2
+  // Remaining clip after consuming header rows (marginTop=1, header=1, paddingTop=1)
+  let remainingClip = Math.max(0, topClip - 3)
+  return (
+    <Box flexDirection="column" marginTop={skipMargin ? 0 : 1}>
+      {showHeader && (
+        <Box flexDirection="row" gap={1}>
+          <Text color={theme.success} bold>✻</Text>
+          <Text color={theme.success} bold>{agentName}</Text>
+        </Box>
+      )}
+      <Box paddingTop={showHeader ? 1 : 0} flexDirection="column">
+        {messages.map(msg => {
+          const bodyClip = remainingClip
+          remainingClip = Math.max(0, remainingClip - estimateBodyLines(msg, contentWidth))
+          return <AssistantBody key={msg.id} msg={msg} topClip={bodyClip} contentWidth={contentWidth} />
+        })}
+      </Box>
+    </Box>
+  )
+}
 
 type MessageGroup =
-  | { kind: 'system'; messages: Message[] }
-  | { kind: 'chat';   message: Message }
+  | { kind: 'system';    messages: Message[] }
+  | { kind: 'chat';      message: Message }
+  | { kind: 'assistant'; messages: Message[] }
 
 function groupMessages(messages: Message[]): MessageGroup[] {
   const groups: MessageGroup[] = []
@@ -283,6 +349,13 @@ function groupMessages(messages: Message[]): MessageGroup[] {
         last.messages.push(msg)
       } else {
         groups.push({ kind: 'system', messages: [msg] })
+      }
+    } else if (msg.role === 'assistant') {
+      const last = groups[groups.length - 1]
+      if (last?.kind === 'assistant') {
+        last.messages.push(msg)
+      } else {
+        groups.push({ kind: 'assistant', messages: [msg] })
       }
     } else {
       groups.push({ kind: 'chat', message: msg })
@@ -316,6 +389,27 @@ function estimateGroupLines(group: MessageGroup, contentWidth: number): number {
       return sum + Math.max(1, Math.ceil(rowLen / contentWidth))
     }, 0)
     return 1 + msgLines
+  }
+  if (group.kind === 'assistant') {
+    // marginTop(1) + header(1) + paddingTop(1) then all iteration bodies
+    let lines = 3
+    for (const msg of group.messages) {
+      if (msg.content) {
+        const physicalLines = msg.content.split('\n')
+        lines += physicalLines.reduce((sum, ln) => sum + Math.max(1, Math.ceil((ln.length || 1) / contentWidth)), 0)
+      }
+      for (const tc of msg.toolCalls ?? []) {
+        lines += 2
+        if (tc.result) {
+          const tcLines = tc.result.split('\n')
+          lines += Math.min(
+            tcLines.reduce((sum, ln) => sum + Math.max(1, Math.ceil((ln.length || 1) / contentWidth)), 0),
+            COLLAPSE_THRESHOLD + 1
+          )
+        }
+      }
+    }
+    return lines
   }
   const msg = group.message
   // marginTop(1) + header(1) + paddingTop(1) - no marginBottom in actual render
@@ -368,8 +462,9 @@ export default function MessageHistory({
   // scrollOffset=0: show newest content at bottom.
   // scrollOffset=N: scroll N lines back into history.
   const maxScroll = Math.max(0, totalLines - msgAreaHeight)
-  const scrollOff = Math.min(state.scrollOffset, maxScroll)
-  if (scrollOff !== state.scrollOffset) {
+  // Auto-scroll to bottom while streaming so new content is always visible
+  const scrollOff = state.isStreaming ? 0 : Math.min(state.scrollOffset, maxScroll)
+  if (scrollOff !== state.scrollOffset && !state.isStreaming) {
     setTimeout(() => setState(prev => ({ ...prev, scrollOffset: scrollOff })), 0)
   }
 
@@ -433,6 +528,9 @@ export default function MessageHistory({
         const groupTopClip = idx === 0 ? Math.max(0, viewTop - inViewStarts[0]!) : 0
         if (group.kind === 'system') {
           return <SystemGroup key={group.messages[0]!.id} messages={group.messages} topClip={groupTopClip} />
+        }
+        if (group.kind === 'assistant') {
+          return <AssistantGroup key={group.messages[0]!.id} messages={group.messages} topClip={groupTopClip} contentWidth={contentWidth} />
         }
         return <ChatTurn key={group.message.id} msg={group.message} topClip={groupTopClip} contentWidth={contentWidth} />
       })}

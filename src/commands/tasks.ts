@@ -5,7 +5,7 @@
 //   /tasks         - list all active tasks
 //   /tasks clear   - remove all completed tasks
 
-import { addSystemMessage, appendMessage } from '../app/AppState.js'
+import { addSystemMessage } from '../app/AppState.js'
 import {
   briefTool,
   taskCreateTool,
@@ -36,21 +36,7 @@ export const tasksCommands: SlashCommandModule[] = [
         return
       }
 
-      const tasks = listTasks()
-      if (tasks.length === 0) {
-        addSystemMessage(ctx.setState, 'info', 'No tasks on the board.')
-        return
-      }
-      addSystemMessage(ctx.setState, 'progress', `tasks  (${tasks.length})`)
-      for (const t of tasks) {
-        const blocked = t.blockedBy.length > 0 ? `  blocked by: ${t.blockedBy.join(', ')}` : ''
-        const owner = t.owner ? `  (${t.owner})` : ''
-        appendMessage(ctx.setState, {
-          role: 'system',
-          content: `  [${t.id}] [${t.status}] ${t.subject}${owner}${blocked}`,
-          notifType: 'kv',
-        })
-      }
+      ctx.setState(prev => ({ ...prev, mode: 'tasks' }))
     },
   },
 ]

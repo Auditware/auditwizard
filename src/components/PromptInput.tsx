@@ -3,6 +3,7 @@ import { Box, Text, useInput, useStdout } from 'ink'
 import { theme } from '../app/theme.js'
 import { useAppState, addSystemMessage } from '../app/AppState.js'
 import { useDoublePress } from '../hooks/useDoublePress.js'
+import { isGlobalStreaming } from '../utils/abortSignal.js'
 import { hasClipboardImage, getClipboardImage, tryReadImagePath, type ImageAttachment } from '../utils/imagePaste.js'
 import { useScrollWindow } from '../utils/useScrollWindow.js'
 import { matchesBinding } from '../utils/keybindings.js'
@@ -54,12 +55,13 @@ function renderInputParts(value: string, textColor: string): React.ReactNode {
 type Props = {
   onSubmit: (value: string, attachments?: ImageAttachment[]) => void
   onAbort?: () => void
+  onSteer?: (value: string, attachments?: ImageAttachment[]) => void
   overlayOpen?: boolean
   slashMenuMaxRows?: number
   commands?: { cmd: string; desc: string; usage?: string; shortcut?: string }[]
 }
 
-export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, slashMenuMaxRows, commands }: Props): React.ReactElement {
+export default function PromptInput({ onSubmit, onAbort, onSteer, overlayOpen = false, slashMenuMaxRows, commands }: Props): React.ReactElement {
   const { state, setState } = useAppState()
   const { stdout } = useStdout()
   const [history, setHistory] = useState<string[]>([])
@@ -94,12 +96,14 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
   )
 
   const isDisabled = overlayOpen || state.isStreaming
-  const promptColor = isDisabled ? theme.inactive : (
+  // Keep a ref so useInput callback always sees current streaming state (avoids stale closure)
+
+  const promptColor = state.isStreaming ? theme.inactive : (overlayOpen ? theme.inactive : (
     state.mode === 'session' ? theme.modeSession :
     theme.brand
-  )
+  ))
 
-  const showMenu = !isDisabled && state.inputValue.startsWith('/') && historyIdx === -1
+  const showMenu = !overlayOpen && !state.isStreaming && state.inputValue.startsWith('/') && historyIdx === -1
   const menuFilter = state.inputValue.toLowerCase()
   const activeCommands = commands ?? SLASH_COMMANDS
   const menuItems = activeCommands.filter(c => c.cmd.startsWith(menuFilter))
@@ -116,7 +120,7 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
     }))
   }
 
-  const submit = useCallback((val: string) => {
+  const submit = useCallback((val: string, steer = false) => {
     // Expand paste tokens back to real content before sending
     let expanded = val
     for (const [token, content] of pasteSlots.current) {
@@ -145,8 +149,12 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
       })
     }
     setState(prev => ({ ...prev, inputValue: '', slashMenuIdx: 0 }))
-    onSubmit(trimmed || '(image)', attachments.length > 0 ? attachments : undefined)
-  }, [onSubmit, setState])
+    if (steer && onSteer) {
+      onSteer(trimmed || '(image)', attachments.length > 0 ? attachments : undefined)
+    } else {
+      onSubmit(trimmed || '(image)', attachments.length > 0 ? attachments : undefined)
+    }
+  }, [onSubmit, onSteer, setState])
 
   useInput((input, key) => {
     const combo = { key: input, ctrl: key.ctrl, shift: key.shift, meta: key.meta }
@@ -154,11 +162,67 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
     // Ctrl+Q: quit (works even when overlay is open)
     if (matchesBinding('app:quit', combo)) { handleCtrlC(); return }
 
-    // Esc or Ctrl+C while streaming: abort the in-flight request
-    if (state.isStreaming && (key.escape || (key.ctrl && input === 'c'))) { onAbort?.(); return }
+    // Esc while streaming: abort the in-flight request (Ctrl+C is handled at raw stdin level)
+    if (isGlobalStreaming && key.escape) { onAbort?.(); return }
 
-    if (isDisabled) return
+    // Overlay blocks everything else
+    if (overlayOpen) return
 
+    // While streaming, only allow: Enter (steer), Shift+Enter (newline), Ctrl+C (clear), backspace, char input
+    if (state.isStreaming) {
+      if (key.return && !key.shift) {
+        if (state.inputValue.trim()) {
+          setState(prev => ({ ...prev, scrollOffset: 0 }))
+          submit(state.inputValue, true)
+          setMenuIdx(0)
+        }
+        return
+      }
+      if (key.return && key.shift) {
+        setState(prev => ({ ...prev, inputValue: prev.inputValue + '\n' }))
+        return
+      }
+      if (key.ctrl && input === 'c') {
+        if (isGlobalStreaming) { onAbort?.(); return }
+        if (state.inputValue.length > 0) {
+          pasteSlots.current.clear()
+          imageSlots.current.clear()
+          setState(prev => ({ ...prev, inputValue: '', slashMenuIdx: 0 }))
+        }
+        return
+      }
+      if (key.backspace || key.delete) {
+        setState(prev => {
+          const val = prev.inputValue
+          const tokenMatch = val.match(/\[\d+ (?:lines|chars) pasted\]$/)
+          if (tokenMatch) { pasteSlots.current.delete(tokenMatch[0]); return { ...prev, inputValue: val.slice(0, -tokenMatch[0].length) } }
+          const imgMatch = val.match(/\[image: [^\]]+\]$/)
+          if (imgMatch) { imageSlots.current.delete(imgMatch[0]); return { ...prev, inputValue: val.slice(0, -imgMatch[0].length) } }
+          return { ...prev, inputValue: val.slice(0, -1) }
+        })
+        return
+      }
+      if (input && !key.ctrl && !key.meta) {
+        const isLargePaste = input.includes('\n') || input.length > PASTE_THRESHOLD
+        if (isLargePaste) {
+          const imgAttachment = tryReadImagePath(input)
+          if (imgAttachment) {
+            const token = `[image: ${imgAttachment.label}]`
+            imageSlots.current.set(token, imgAttachment)
+            setState(prev => ({ ...prev, inputValue: prev.inputValue + token }))
+            return
+          }
+          const token = pasteToken(input)
+          pasteSlots.current.set(token, input)
+          setState(prev => ({ ...prev, inputValue: prev.inputValue + token }))
+          return
+        }
+        setState(prev => ({ ...prev, inputValue: prev.inputValue + input }))
+      }
+      return
+    }
+
+    // Not streaming - full input handling below
     // Global shortcuts: open pickers via submit so the full command flow runs
     if (matchesBinding('session:open', combo)) { submit('/sessions'); return }
     if (matchesBinding('skills:open',  combo)) { submit('/skills');   return }
@@ -200,6 +264,8 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
     }
 
     if (key.ctrl && input === 'c') {
+      // Guard: if streaming started since last render, abort instead of quit
+      if (isGlobalStreaming) { onAbort?.(); return }
       // First Ctrl+C clears input if non-empty; second triggers quit flow
       if (state.inputValue.length > 0) {
         pasteSlots.current.clear()
@@ -378,8 +444,8 @@ export default function PromptInput({ onSubmit, onAbort, overlayOpen = false, sl
             )
           })}
         </Box>
-        {isDisabled && state.isStreaming && (
-          <Text color={theme.inactive} dimColor>Thinking… <Text color={theme.suggestion}>Esc/^C cancel</Text></Text>
+        {state.isStreaming && (
+          <Text color={theme.inactive} dimColor>Thinking… <Text color={theme.suggestion}>Esc/^C cancel · Enter to steer</Text></Text>
         )}
       </Box>
     </Box>

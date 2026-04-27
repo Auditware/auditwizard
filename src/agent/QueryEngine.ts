@@ -7,10 +7,11 @@ import type { AppState, Message, ToolCall } from '../app/AppState.js'
 import type { Dispatch, SetStateAction } from 'react'
 import { appendMessage as persistMessage, writeMeta, readMeta } from '../context/session.js'
 import { appendMessage, updateMessage, addSystemMessage } from '../app/AppState.js'
-import { buildContextWindow, findCleanSplitPoint, type CompactCache, COMPACT_THRESHOLD, COMPACT_TRIGGER_NEW } from '../context/Compactor.js'
+import { buildContextWindow, type CompactCache, estimateMessagesTokens, COMPACT_THRESHOLD_TOKENS, MICROCOMPACT_THRESHOLD_TOKENS, summarizeLargeToolResult, TOOL_RESULT_SUMMARIZE_CHARS } from '../context/Compactor.js'
 import type { ImageAttachment } from '../utils/imagePaste.js'
 import { userInputChannel } from '../utils/userInputChannel.js'
 import { recordTokens } from '../config/SpendTracker.js'
+import { setGlobalStreaming } from '../utils/abortSignal.js'
 
 export type Tool = {
   name: string
@@ -34,6 +35,7 @@ export class QueryEngine {
   private usageWindow: UsageWindow[] = []
   private compactCache: CompactCache | null = null
   private abortController: AbortController | null = null
+  private pendingSteer: { text: string; attachments?: ImageAttachment[]; setState: Dispatch<SetStateAction<AppState>>; getState: () => AppState } | null = null
   // Structured API transcript - drives API calls (display messages are UI-only)
   private transcript: Anthropic.Messages.MessageParam[] = []
   // Active skill content stored out-of-band - injected into system prompt each turn
@@ -221,6 +223,7 @@ export class QueryEngine {
 
     const abortController = new AbortController()
     this.abortController = abortController
+    setGlobalStreaming(true)  // synchronous - immediately visible to raw stdin handler
 
     const systemPromptBase = this.buildSystemPromptBase(state)
 
@@ -245,19 +248,32 @@ export class QueryEngine {
         }
         isFirstIteration = false
 
-        // Compact if needed
-        const needsCompact = !this.compactCache
-          ? this.transcript.length > COMPACT_THRESHOLD
-          : (this.transcript.length - this.compactCache.coveredCount) >= COMPACT_TRIGGER_NEW
-            && this.transcript.length > COMPACT_THRESHOLD
+        // Token-based compaction check - runs every iteration so multi-tool loops
+        // can't silently overfill the context window.
+        const liveWindowStart = this.compactCache?.coveredCount ?? 0
+        const liveTokenEstimate = estimateMessagesTokens(this.transcript.slice(liveWindowStart))
+        const pressure = liveTokenEstimate >= MICROCOMPACT_THRESHOLD_TOKENS ? 'critical'
+          : liveTokenEstimate >= 145_000 ? 'warn'
+          : 'none'
+        setState(prev => ({ ...prev, contextPressure: pressure }))
+        const willCompact = liveTokenEstimate >= COMPACT_THRESHOLD_TOKENS
 
-        if (needsCompact) setState(prev => ({ ...prev, isCompacting: true }))
-        const { messages: contextMessages, systemAddition, cache, didCompact } =
-          await buildContextWindow(this.transcript, this.compactCache, this.client, state.model)
-        if (needsCompact) setState(prev => ({ ...prev, isCompacting: false }))
+        if (willCompact) setState(prev => ({ ...prev, isCompacting: true }))
+        const { messages: contextMessages, systemAddition, cache, didCompact, didMicrocompact } =
+          await buildContextWindow(this.transcript, this.compactCache, this.client, state.model, liveTokenEstimate)
+        if (willCompact) setState(prev => ({ ...prev, isCompacting: false }))
         this.compactCache = cache
+        if (didCompact || didMicrocompact) {
+          const newLive = estimateMessagesTokens(this.transcript.slice(cache?.coveredCount ?? 0))
+          const newPressure = newLive >= MICROCOMPACT_THRESHOLD_TOKENS ? 'critical'
+            : newLive >= 145_000 ? 'warn'
+            : 'none'
+          setState(prev => ({ ...prev, contextPressure: newPressure }))
+        }
         if (didCompact) {
-          addSystemMessage(setState, 'info', `Context compacted - ${contextMessages.length} live turns`)
+          addSystemMessage(setState, 'info', `context compacted - ${contextMessages.length} live turns`)
+        } else if (didMicrocompact) {
+          addSystemMessage(setState, 'info', 'microcompact applied - large tool results cleared')
         }
 
         const systemPrompt = [systemPromptBase, systemAddition, this.buildActiveSkillSection()].filter(Boolean).join('\n')
@@ -283,6 +299,15 @@ export class QueryEngine {
         const finalMsg = await stream.finalMessage()
         totalInputTokens += finalMsg.usage.input_tokens
         totalOutputTokens += finalMsg.usage.output_tokens
+
+        // Update cost display after each iteration so UI reflects live spend
+        setState(prev => ({
+          ...prev,
+          lastInputTokens: totalInputTokens,
+          sessionTokens: prev.sessionTokens + finalMsg.usage.input_tokens + finalMsg.usage.output_tokens,
+          sessionInputTokens: prev.sessionInputTokens + finalMsg.usage.input_tokens,
+          sessionOutputTokens: prev.sessionOutputTokens + finalMsg.usage.output_tokens,
+        }))
 
         // Push verbatim structured content back to transcript
         this.transcript.push({ role: 'assistant', content: finalMsg.content })
@@ -333,7 +358,9 @@ export class QueryEngine {
             updateMessage(setState, currentMsgId, { toolCalls: [...currentToolCalls] })
           }
 
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result })
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result.length > TOOL_RESULT_SUMMARIZE_CHARS
+            ? await summarizeLargeToolResult(result, this.client, state.model)
+            : result })
         }
 
         persistQueue.push({ id: currentMsgId, content: iterContent, toolCalls: currentToolCalls })
@@ -347,8 +374,6 @@ export class QueryEngine {
     } catch (err) {
       const isAbort = abortController.signal.aborted
       if (isAbort) {
-        // Remove any dangling assistant tool_use turn (tool_results never reached)
-        this.trimDanglingToolUseTurn()
         addSystemMessage(setState, 'info', 'cancelled')
       } else {
         // Full rollback - restore transcript to pre-submit state so next send is clean
@@ -358,17 +383,24 @@ export class QueryEngine {
         addSystemMessage(setState, 'error', `API error: ${errMsg}`)
       }
     } finally {
+      setGlobalStreaming(false)  // synchronous - before React setState
+      // Always clean up dangling tool_use turns on abort (whether abort fired mid-stream
+      // causing an exception, or after finalMessage resolved causing a clean break)
+      if (abortController.signal.aborted) {
+        // Order matters: remove partial tool_result user turn first, then the orphaned
+        // assistant tool_use turn. If we trim tool_use first, the user turn check
+        // (role !== 'user') skips it, leaving an orphaned assistant turn in transcript.
+        this.trimDanglingToolResultTurn()
+        this.trimDanglingToolUseTurn()
+      }
       this.abortController = null
       this.usageWindow.push({ tokens: totalInputTokens + totalOutputTokens, at: Date.now() })
       recordTokens(totalInputTokens, totalOutputTokens, this.apiKey, state.model)
+      // Only update streaming flag and rate limit here - token counts are updated live per-iteration above
       setState(prev => ({
         ...prev,
         isStreaming: false,
         rateLimit: this.getRateLimitRatio(),
-        lastInputTokens: totalInputTokens,
-        sessionTokens: prev.sessionTokens + totalInputTokens + totalOutputTokens,
-        sessionInputTokens: prev.sessionInputTokens + totalInputTokens,
-        sessionOutputTokens: prev.sessionOutputTokens + totalOutputTokens,
       }))
 
       // Persist user message then all assistant iterations
@@ -404,11 +436,50 @@ export class QueryEngine {
         inputTokens: newInput,
         outputTokens: newOutput,
       })
+
+      // Drain any pending steer LAST - after all persistence is complete
+      if (this.pendingSteer) this.drainPendingSteer()
     }
   }
 
   // Remove trailing assistant turn that has tool_use blocks but no matching tool_results.
   // This happens when we abort mid-tool-execution after the assistant turn was pushed.
+  // Manually trigger compaction. No-op if a submit is already in progress.
+  async compactNow(state: AppState, setState: Dispatch<SetStateAction<AppState>>): Promise<void> {
+    if (this.abortController !== null) {
+      addSystemMessage(setState, 'error', 'cannot compact while a request is active')
+      return
+    }
+    if (this.transcript.length === 0) {
+      addSystemMessage(setState, 'info', 'nothing to compact')
+      return
+    }
+    setState(prev => ({ ...prev, isCompacting: true }))
+    try {
+      const { cache, didCompact, didMicrocompact } = await buildContextWindow(
+        this.transcript, this.compactCache, this.client, state.model, 0, true,
+      )
+      this.compactCache = cache
+      const live = this.transcript.length - (cache?.coveredCount ?? 0)
+      const newLive = estimateMessagesTokens(this.transcript.slice(cache?.coveredCount ?? 0))
+      const newPressure = newLive >= MICROCOMPACT_THRESHOLD_TOKENS ? 'critical'
+        : newLive >= 145_000 ? 'warn'
+        : 'none'
+      setState(prev => ({ ...prev, contextPressure: newPressure }))
+      if (didCompact) {
+        addSystemMessage(setState, 'success', `compacted - ${live} live turns`)
+      } else if (didMicrocompact) {
+        addSystemMessage(setState, 'info', 'microcompact applied - large tool results cleared')
+      } else {
+        addSystemMessage(setState, 'info', 'context already compact')
+      }
+    } catch (err) {
+      addSystemMessage(setState, 'error', `compact failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setState(prev => ({ ...prev, isCompacting: false }))
+    }
+  }
+
   private trimDanglingToolUseTurn(): void {
     const last = this.transcript.at(-1)
     if (!last || last.role !== 'assistant') return
@@ -417,5 +488,47 @@ export class QueryEngine {
       (b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_use'
     )
     if (hasToolUse) this.transcript.pop()
+  }
+
+  // Remove trailing user turn that only contains tool_result blocks (partial batch on abort).
+  private trimDanglingToolResultTurn(): void {
+    const last = this.transcript.at(-1)
+    if (!last || last.role !== 'user') return
+    const content = Array.isArray(last.content) ? last.content : []
+    if (content.length === 0) return
+    const allToolResults = content.every(
+      (b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result'
+    )
+    if (allToolResults) this.transcript.pop()
+  }
+
+  // Called by App when user submits while streaming - aborts current run and resubmits.
+  steer(
+    text: string,
+    setState: Dispatch<SetStateAction<AppState>>,
+    getState: () => AppState,
+    attachments?: ImageAttachment[],
+  ): void {
+    this.pendingSteer = { text, attachments, setState, getState }
+    if (this.abortController !== null) {
+      addSystemMessage(setState, 'info', '↩ steering…')
+      this.abortController.abort('user-steer')
+    } else {
+      this.drainPendingSteer()
+    }
+  }
+
+  private drainPendingSteer(): void {
+    const steer = this.pendingSteer
+    if (!steer) return
+    this.pendingSteer = null
+    const snapshot = steer.getState()
+    const userMsgId = crypto.randomUUID()
+    steer.setState(prev => ({
+      ...prev,
+      isStreaming: true,
+      messages: [...prev.messages, { id: userMsgId, role: 'user' as const, content: steer.text }],
+    }))
+    void this.submit(steer.text, { ...snapshot, isStreaming: true }, steer.setState, steer.attachments)
   }
 }

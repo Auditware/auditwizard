@@ -1,5 +1,6 @@
 // /ctx - context window breakdown by segment. genome: ['nuc']
 // Subcommands:
+//   /ctx c     - compact context now (manual trigger)
 //   /ctx reset - reset AI conversation context (clears transcript + compaction cache)
 
 import { addSystemMessage } from '../app/AppState.js'
@@ -8,13 +9,9 @@ import type { SlashCommandModule, CommandContext } from './types.js'
 function handleCtxReset(ctx: CommandContext): void {
   const { setState, engineRef } = ctx
   
-  // Reset the AI transcript (conversation history sent to the API)
   engineRef.current.resetTranscript()
-  
-  // Also reset the compaction cache since we're starting fresh
   engineRef.current.resetCompactCache()
   
-  // Clear display messages and show confirmation
   setState(prev => ({
     ...prev,
     messages: [{
@@ -25,6 +22,7 @@ function handleCtxReset(ctx: CommandContext): void {
       timestamp: Date.now(),
     }],
     lastInputTokens: 0,
+    contextPressure: 'none',
   }))
 }
 
@@ -35,21 +33,25 @@ function handleCtx(args: string, ctx: CommandContext): void {
     handleCtxReset(ctx)
     return
   }
+
+  if (subcommand === 'c') {
+    void ctx.engineRef.current.compactNow(ctx.state, ctx.setState)
+    return
+  }
   
-  // No subcommand - open interactive panel
   if (!subcommand) {
     ctx.setState(prev => ({ ...prev, mode: 'ctx' as const }))
     return
   }
 
   addSystemMessage(ctx.setState, 'error', `unknown subcommand: ${subcommand}`)
-  addSystemMessage(ctx.setState, 'info', 'usage: /ctx [reset]')
+  addSystemMessage(ctx.setState, 'info', 'usage: /ctx [c|reset]')
 }
 
 export const ctxCommand: SlashCommandModule = {
   cmd: '/ctx',
   desc: 'context window breakdown by segment',
-  usage: '/ctx [reset]',
+  usage: '/ctx [c|reset]',
   genome: ['nuc'],
   handler: handleCtx,
 }

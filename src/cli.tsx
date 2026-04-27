@@ -9,6 +9,7 @@ import { ReadStream } from 'tty'
 import { agentsDir } from './config/agentsDir.js'
 import App from './app/App.js'
 import { RELOAD_EXIT_CODE } from './reload/reload.js'
+import { emitGlobalAbort, isGlobalStreaming } from './utils/abortSignal.js'
 
 // ─── Fast paths ───────────────────────────────────────────────────────────────
 
@@ -170,6 +171,9 @@ function restoreScreen() {
 }
 process.on('exit', restoreScreen)
 process.on('SIGTERM', () => { restoreScreen(); process.exit(0) })
+// Suppress unhandled rejection noise on clean exit (e.g. AbortError after Ctrl+C)
+process.on('unhandledRejection', () => {})
+process.on('uncaughtException', () => {})
 
 // Clean up pane registration file on exit
 process.on('exit', () => {
@@ -212,6 +216,12 @@ inkStdin.setRawMode = (mode: boolean) => {
 ;(inkStdin as unknown as { ref: () => void; unref: () => void }).unref = () => rawStdin.unref?.()
 
 rawStdin.on('data', (chunk: Buffer) => {
+  // Ctrl+C raw byte (0x03): if streaming, abort and swallow - don't pass to Ink
+  // (prevents the double-Ctrl+C quit flow from firing mid-stream)
+  if (chunk[0] === 0x03) {
+    emitGlobalAbort()
+    if (isGlobalStreaming) return
+  }
   const cleaned = chunk.toString('binary').replace(MOUSE_STRIP_RE, '')
   if (cleaned.length > 0) inkStdin.push(Buffer.from(cleaned, 'binary'))
 })
