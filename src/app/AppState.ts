@@ -12,6 +12,7 @@ export type ToolCall = {
   name: string
   input: Record<string, unknown>
   result?: string
+  progress?: string
   status: 'pending' | 'running' | 'done' | 'error'
   startedAt: number
   completedAt?: number

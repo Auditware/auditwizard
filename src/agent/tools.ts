@@ -136,18 +136,21 @@ export const fetchUrlTool: Tool = {
     },
     required: ['url'],
   },
-  async execute(input) {
+  async execute(input, onProgress) {
     const url = String(input['url'] ?? '').trim()
     const raw = Boolean(input['raw'])
     if (!url) return 'Error: url is required'
     try {
+      onProgress?.('connecting…')
       const res = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Agent/1.0; +https://github.com/auditware/auditwizard)' },
         signal: AbortSignal.timeout(15_000),
       })
       if (!res.ok) return `HTTP ${res.status}: ${res.statusText}`
+      onProgress?.('downloading…')
       const text = await res.text()
       if (raw) return text.slice(0, 50_000)
+      onProgress?.('parsing…')
       const stripped = text
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')

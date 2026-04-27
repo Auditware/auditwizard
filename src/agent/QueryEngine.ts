@@ -17,7 +17,7 @@ export type Tool = {
   name: string
   description: string
   input_schema: Record<string, unknown>
-  execute: (input: Record<string, unknown>) => Promise<string>
+  execute: (input: Record<string, unknown>, onProgress?: (text: string) => void) => Promise<string>
 }
 
 // Rate limit estimation: track tokens used in last minute
@@ -218,6 +218,10 @@ export class QueryEngine {
     // Record transcript size so we can roll back cleanly on error
     const transcriptSizeBeforeSubmit = this.transcript.length
 
+    // Defensive: repair any tool_use/tool_result pairing issues before sending.
+    // This is a no-op on a clean transcript but catches corruption from edge cases.
+    this.repairTranscript()
+
     // Push user message to transcript
     this.transcript.push({ role: 'user', content: userContent })
 
@@ -340,8 +344,13 @@ export class QueryEngine {
 
           let result = ''
           if (tool) {
+            const onProgress = (text: string) => {
+              const idx = currentToolCalls.findIndex(tc => tc.id === toolCallId)
+              if (idx >= 0) currentToolCalls[idx] = { ...currentToolCalls[idx]!, progress: text }
+              updateMessage(setState, currentMsgId, { toolCalls: [...currentToolCalls] })
+            }
             try {
-              result = await tool.execute(block.input as Record<string, unknown>)
+              result = await tool.execute(block.input as Record<string, unknown>, onProgress)
               const idx = currentToolCalls.findIndex(tc => tc.id === toolCallId)
               if (idx >= 0) currentToolCalls[idx] = { ...currentToolCalls[idx]!, status: 'done', result, completedAt: Date.now() }
               updateMessage(setState, currentMsgId, { toolCalls: [...currentToolCalls] })
@@ -384,15 +393,14 @@ export class QueryEngine {
       }
     } finally {
       setGlobalStreaming(false)  // synchronous - before React setState
-      // Always clean up dangling tool_use turns on abort (whether abort fired mid-stream
-      // causing an exception, or after finalMessage resolved causing a clean break)
-      if (abortController.signal.aborted) {
-        // Order matters: remove partial tool_result user turn first, then the orphaned
-        // assistant tool_use turn. If we trim tool_use first, the user turn check
-        // (role !== 'user') skips it, leaving an orphaned assistant turn in transcript.
-        this.trimDanglingToolResultTurn()
-        this.trimDanglingToolUseTurn()
-      }
+      // Always clean up dangling tool_use/tool_result turns regardless of how we exited.
+      // The non-abort error path already did transcript.splice(), making these no-ops.
+      // The abort path needs them. Any other unexpected exit also benefits.
+      // Order matters: remove partial tool_result user turn first, then the orphaned
+      // assistant tool_use turn. If we trim tool_use first, the user turn check
+      // (role !== 'user') skips it, leaving an orphaned assistant turn in transcript.
+      this.trimDanglingToolResultTurn()
+      this.trimDanglingToolUseTurn()
       this.abortController = null
       this.usageWindow.push({ tokens: totalInputTokens + totalOutputTokens, at: Date.now() })
       recordTokens(totalInputTokens, totalOutputTokens, this.apiKey, state.model)
@@ -500,6 +508,45 @@ export class QueryEngine {
       (b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result'
     )
     if (allToolResults) this.transcript.pop()
+  }
+
+  // Scan the full transcript and remove any turn where an assistant tool_use is not
+  // immediately followed by a user turn containing all matching tool_results.
+  // This catches corruption that escaped the tail-only trim (e.g. from mid-transcript
+  // partial writes during unexpected exits).
+  private repairTranscript(): void {
+    let i = 0
+    while (i < this.transcript.length) {
+      const turn = this.transcript[i]!
+      if (turn.role !== 'assistant') { i++; continue }
+      const content = Array.isArray(turn.content) ? turn.content : []
+      const toolUseIds = content
+        .filter((b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_use')
+        .map((b) => (b as { id?: string }).id)
+        .filter((id): id is string => typeof id === 'string')
+      if (toolUseIds.length === 0) { i++; continue }
+
+      // Check next turn has matching tool_results for every tool_use id
+      const next = this.transcript[i + 1]
+      const nextContent = next && Array.isArray(next.content) ? next.content : []
+      const resultIds = new Set(
+        nextContent
+          .filter((b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result')
+          .map((b) => (b as { tool_use_id?: string }).tool_use_id)
+          .filter((id): id is string => typeof id === 'string')
+      )
+      const allCovered = toolUseIds.every(id => resultIds.has(id))
+      if (!allCovered) {
+        // Remove the dangling assistant turn (and the partial tool_result turn after it if present)
+        const toRemove = (next && nextContent.length > 0 && nextContent.every(
+          (b): boolean => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result'
+        )) ? 2 : 1
+        this.transcript.splice(i, toRemove)
+        // Don't advance i - re-check same position after splice
+      } else {
+        i++
+      }
+    }
   }
 
   // Called by App when user submits while streaming - aborts current run and resubmits.

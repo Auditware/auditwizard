@@ -234,8 +234,8 @@ export const pocTool: Tool = {
     'EVM PoCs run inside Docker (ghcr.io/foundry-rs/foundry). Rust/Solana run natively.',
     'Storage: ~/.agents/auditwizard/contests/<slug>/pocs/<id>/',
     '',
-    'When creating a PoC for a finding, pass bug_id to link it to a bug in the warden bugs view.',
-    'The bug\'s pocId will be set so the user can re-run and view output from the warden panel.',
+    'When creating a PoC, if no bug_id is provided a bug record is automatically authored',
+    'using the PoC title. The bug and PoC are linked bidirectionally.',
     '',
     'Actions:',
     '  create         - write test file to disk, register PoC metadata',
@@ -289,7 +289,7 @@ export const pocTool: Tool = {
         const testFile = input['test_file'] as string
         const chain = (input['chain'] as string | undefined) ?? 'evm'
         const command = (input['command'] as string | undefined) ?? (isEvm(chain) ? 'forge test -vv' : 'cargo test')
-        const bugId = input['bug_id'] as string | undefined
+        let bugId = input['bug_id'] as string | undefined
         if (!title || !testFile) return 'Error: title and test_file are required.'
 
         const id = newPocId()
@@ -298,6 +298,20 @@ export const pocTool: Tool = {
         ensureContestDir(slug!)
         ensurePocDir(slug!, id)
         writeFileSync(join(pocDir(slug!, id), testFileName), testFile)
+
+        // Auto-create the bug record if no bug_id was provided
+        const { loadBugs, saveBug } = await import('./contestStore.js')
+        let bugCreated = false
+        if (!bugId) {
+          const newBug = {
+            id: 'bug-' + id,
+            title,
+            createdAt: Date.now(),
+          }
+          saveBug(slug!, newBug)
+          bugId = newBug.id
+          bugCreated = true
+        }
 
         const meta: PocMeta = {
           id, title, chain, command, testFileName,
@@ -308,18 +322,15 @@ export const pocTool: Tool = {
         }
         savePocMeta(slug!, meta)
 
-        // If linked to a bug, write pocId back to the bug record
-        if (bugId) {
-          const { loadBugs, saveBug } = await import('./contestStore.js')
-          const bugs = loadBugs(slug!)
-          const bug = bugs.find(b => b.id === bugId)
-          if (bug) {
-            bug.pocId = id
-            saveBug(slug!, bug)
-          }
+        // Link pocId back to the bug record
+        const bugs = loadBugs(slug!)
+        const bug = bugs.find(b => b.id === bugId)
+        if (bug) {
+          bug.pocId = id
+          saveBug(slug!, bug)
         }
 
-        return `PoC created: id=${id}  file=${testFileName}${bugId ? `  linked to bug=${bugId}` : ''}\nRun with: poc action=run poc_id=${id}`
+        return `PoC created: id=${id}  file=${testFileName}\n${bugCreated ? `Bug authored: id=${bugId}  title="${title}"` : `Linked to existing bug=${bugId}`}\nRun with: poc action=run poc_id=${id}`
       }
 
       if (action === 'run') {

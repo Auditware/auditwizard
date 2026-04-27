@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text, useStdout } from 'ink'
 import { theme } from '../app/theme.js'
 import { useAppState, type Message, type ToolCall } from '../app/AppState.js'
+import { Spinner, ElapsedSeconds } from './Spinner.js'
 
 const AGENT_BANNER = `  audit-wizard`
 const AGENT_SUB    = `  AI Auditing Agent`
@@ -68,32 +69,48 @@ const STATUS_COLOR: Record<string, string> = {
 }
 const COLLAPSE_THRESHOLD = 4
 
+// Extract a compact one-line summary from tool input (like Claude Code's renderToolUseMessage).
+// Picks the most meaningful string field - path, url, command, query, name - truncated to fit.
+function toolInputSummary(input: Record<string, unknown>, maxLen = 60): string {
+  const PRIORITY_KEYS = ['path', 'file_path', 'url', 'command', 'cmd', 'query', 'pattern', 'name', 'skill', 'description']
+  for (const key of PRIORITY_KEYS) {
+    const val = input[key]
+    if (typeof val === 'string' && val.trim()) {
+      const trimmed = val.trim().replace(/\n/g, ' ')
+      return trimmed.length > maxLen ? trimmed.slice(0, maxLen - 1) + '…' : trimmed
+    }
+  }
+  // Fallback: first string value
+  for (const val of Object.values(input)) {
+    if (typeof val === 'string' && val.trim()) {
+      const trimmed = val.trim().replace(/\n/g, ' ')
+      return trimmed.length > maxLen ? trimmed.slice(0, maxLen - 1) + '…' : trimmed
+    }
+  }
+  return ''
+}
+
 function ToolCallBlock({ tc }: { tc: ToolCall }): React.ReactElement {
   const { stdout } = useStdout()
-  const maxW = (stdout?.columns ?? 80) - 8  // account for paddingLeft
-  const [expanded, setExpanded] = useState(false)
+  const maxW = (stdout?.columns ?? 80) - 8
   const icon = STATUS_ICON[tc.status] ?? '○'
   const color = STATUS_COLOR[tc.status] ?? theme.inactive
-
-  const resultLines = tc.result?.split('\n') ?? []
-  const truncated = !expanded && resultLines.length > COLLAPSE_THRESHOLD
-  const visibleLines = truncated ? resultLines.slice(0, COLLAPSE_THRESHOLD) : resultLines
+  const summary = toolInputSummary(tc.input, maxW - tc.name.length - 4)
 
   return (
     <Box flexDirection="column" paddingLeft={2} marginBottom={0}>
       <Box flexDirection="row" gap={1}>
-        <Text color={color}>{icon}</Text>
+        {tc.status === 'running' ? <Spinner /> : <Text color={color}>{icon}</Text>}
         <Text color={theme.inactive} wrap="truncate">{tc.name}</Text>
-        {tc.status === 'running' && <Text color={theme.brand}>...</Text>}
+        {tc.status === 'running'
+          ? <><ElapsedSeconds />{tc.progress ? <Text color={theme.inactive} dimColor>{tc.progress}</Text> : null}</>
+          : summary
+            ? <Text color={theme.inactive} dimColor wrap="truncate">{summary}</Text>
+            : null}
       </Box>
-      {tc.result && (
-        <Box flexDirection="column" paddingLeft={2} width={maxW}>
-          {visibleLines.map((line, i) => (
-            <Text key={i} color={theme.inactive} dimColor wrap="truncate">{line}</Text>
-          ))}
-          {truncated && (
-            <Text color={theme.suggestion} dimColor>  ↕ {resultLines.length - COLLAPSE_THRESHOLD} more lines</Text>
-          )}
+      {tc.status === 'error' && tc.result && (
+        <Box paddingLeft={2} width={maxW}>
+          <Text color={theme.error} wrap="truncate">{tc.result.split('\n')[0]}</Text>
         </Box>
       )}
     </Box>
@@ -536,8 +553,8 @@ export default function MessageHistory({
       })}
       {state.isStreaming && (
         <Box flexDirection="row" gap={1} paddingLeft={2} marginTop={1}>
-          <Text color={theme.brand}>◆</Text>
-          <Text color={theme.inactive}>thinking...</Text>
+          <Spinner />
+          <Text color={theme.inactive}>thinking…</Text>
         </Box>
       )}
       {hiddenBelow > 0 && (
